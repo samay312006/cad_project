@@ -2,7 +2,7 @@
 
 ## Abstract
 
-A hobby-scale 4-wheel ground robot pairs a real-time ESP32 controller with an Android phone bridge/GUI and a cloud "brain" (AWS EC2 running SLAM Toolbox, Nav2, and a custom D*-Lite global planner) to deliver three operating modes — Manual, Autonomous, and Follow-me — plus an electromagnet actuator for small magnetic payload pickup. The system's defining control property is a closed-loop, autonomous incline-compensation controller: rather than relying on manual per-terrain tuning, the robot infers increased drive load from current/voltage sensing (a back-EMF-informed signal) and reallocates motor power in real time. This is enforced by a strict architectural split — the ESP32 owns all real-time control and safety locally; the cloud is used only for heavy math (mapping, global path planning) and is never in the safety-critical path.
+A hobby-scale 4-wheel ground robot pairs a real-time ESP32 controller with a handheld Android phone bridge/GUI (connected wirelessly, not robot-mounted) and a cloud "brain" (AWS EC2 running SLAM Toolbox, Nav2, and a custom D*-Lite global planner) to deliver three operating modes — Manual, Autonomous, and Follow-me — plus an electromagnet actuator for small magnetic payload pickup. The system's defining control property is a closed-loop, autonomous incline-compensation controller: rather than relying on manual per-terrain tuning, the robot infers increased drive load from current/voltage sensing (a back-EMF-informed signal) and reallocates motor power in real time. This is enforced by a strict architectural split — the ESP32 owns all real-time control and safety locally; the cloud is used only for heavy math (mapping, global path planning) and is never in the safety-critical path.
 
 ## Application
 
@@ -19,14 +19,17 @@ Intended as a low-cost platform for terrain-crossing payload retrieval (e.g. pic
 ## Architecture
 
 ```
-   ESP32 (real-time control + safety)  ◄──USB serial, JSON──►  Phone (bridge/GUI)
-        │  IMU, GPS, current/voltage,                              │ lidar (USB-OTG)
-        │  motor PWM, electromagnet                                │
+   ESP32 (real-time control + safety)  ◄──Wi-Fi, UDP JSON──►  Phone (handheld bridge/GUI)
+        │  IMU, GPS, current/voltage,                              │
+        │  motor PWM, electromagnet,                                │
+        │  range sensor + sweep servo                                │
         └── owns: mode arbitration, SAFE_HOLD,                     └── MQTT/TLS ──► EC2
             incline-compensation loop, stall/                          (SLAM Toolbox,
-            brownout protection                                        Nav2, D*-Lite —
+            brownout protection, scan assembly                         Nav2, D*-Lite —
                                                                          heavy math only)
 ```
+
+The ESP32 now hosts its own Wi-Fi access point — the phone is a handheld device, not robot-mounted, and connects to it directly (`spec.md` §6.1, §7). This is also why the range sensor moved from the phone (formerly USB-OTG) onto the ESP32: a single-point sensor on a continuously sweeping servo, emulating a 2D scan (§2 sensor list in `spec.md`, not a spinning 2D lidar — dropped for cost).
 
 Full interface contracts, message schemas, and the sensor list (with `[TBD]` BOM gaps) are in `spec.md` §4/§6. This document focuses on what runs on the ESP32 and why it's structured the way it is.
 
@@ -36,7 +39,7 @@ Full interface contracts, message schemas, and the sensor list (with `[TBD]` BOM
 
 Inputs available to the ESP32's state estimate (per `spec.md` §4): IMU (orientation/rate), GPS (coarse absolute position, outdoor only), and current/voltage (indirect load/terrain signal, not a position sensor).
 
-**Open gap, flagged rather than papered over**: the current sensor list has **no dedicated wheel encoders**. This means the odometry input SLAM Toolbox consumes (`spec.md` §6.2 `robot/{id}/odom`) is, as currently scoped, IMU-integration-based dead reckoning — which drifts over time in a way wheel odometry typically doesn't. SLAM Toolbox can still function from lidar scan-matching alone `[VERIFY: confirm slam_toolbox's tolerance for odometry-free or low-quality-odometry operation in the chosen mode]`, but robustness (especially during Follow-me, where the robot itself is moving reactively rather than along a smooth planned path) would likely benefit from adding low-cost wheel encoders. This is a recommendation to evaluate, not a decided BOM change — noted here because it's a real design gap, not because encoders were promised anywhere in the background.
+**Open gap, flagged rather than papered over**: the current sensor list has **no dedicated wheel encoders**. This means the odometry input SLAM Toolbox consumes (`spec.md` §6.2 `robot/{id}/odom`) is, as currently scoped, IMU-integration-based dead reckoning — which drifts over time in a way wheel odometry typically doesn't. SLAM Toolbox can still function from range-scan matching alone `[VERIFY: confirm slam_toolbox's tolerance for odometry-free or low-quality-odometry operation in the chosen mode, and separately confirm its tolerance for the much coarser/slower scan produced by a servo-swept single-point sensor rather than a spinning 2D lidar]`, but robustness (especially during Follow-me, where the robot itself is moving reactively rather than along a smooth planned path) would likely benefit from adding low-cost wheel encoders. This is a recommendation to evaluate, not a decided BOM change — noted here because it's a real design gap, not because encoders were promised anywhere in the background.
 
 **Fusion approach** `[ASSUMPTION — not yet implemented, this is the recommended starting design]`: a complementary or extended Kalman filter fusing gyro (rate) with accel (gravity-vector-derived tilt) for orientation, and GPS position (when fix quality is good) with IMU-integrated dead-reckoning for position, with GPS *down-weighted or excluded* during detected fix-quality drops (see Warnings, `plan.md` 2a.6) rather than trusted blindly. `[VERIFY]` exact filter choice (complementary filter is simpler/cheaper on an ESP32's compute budget; EKF is more principled but more compute) should be a deliberate tradeoff decision made once the ESP32 variant `[TBD]` and its available compute headroom is known.
 
@@ -83,7 +86,7 @@ Entirely on the ESP32, at the control loop's native rate (`spec.md` NFR-1, `[ASS
 | Owns | mode arbitration, SAFE_HOLD, incline compensation, stall/brownout protection, path-following *between* waypoint updates | SLAM map building, D*-Lite global path computation |
 | Timescale | milliseconds | seconds |
 | Availability requirement | must always work | best-effort — absence degrades capability, not safety |
-| Input | IMU, GPS, current/voltage, heartbeat state | lidar scan, odometry, goal |
+| Input | IMU, GPS, current/voltage, heartbeat state, range sensor + sweep servo (raw samples) | assembled range scan (relayed from ESP32 via phone), odometry, goal |
 
 The split isn't just "cloud is for expensive computation" — it's specifically that **nothing on the fault-detection-to-SAFE_HOLD path may reference cloud-sourced data**, per `spec.md` §9. The ESP32 caches the last valid waypoint list and continues local path-following/reflex behavior against it if the cloud link drops; it only enters SAFE_HOLD from a stale plan if that staleness itself crosses a threshold (`spec.md` §8, `[ASSUMPTION] 10 s`), which is a local timer check, not a cloud dependency.
 
@@ -101,7 +104,7 @@ The cross-cutting `SAFE_HOLD` interlock (not counted as a fourth mode, per the p
 
 `[ASSUMPTION/VERIFY]` — the following describes the recommended real-time structure; exact APIs depend on the ESP32 variant `[TBD]` and whether the firmware is built on ESP-IDF (FreeRTOS-based) or Arduino-on-ESP-IDF.
 
-- **Task structure**: a high-priority control task (sensor sampling, incline-compensation loop, mode/SAFE_HOLD logic) should run at a fixed, guaranteed rate, separated from lower-priority tasks like phone-link JSON parsing — so a slow or malformed serial parse can't introduce jitter into the control loop. `[VERIFY]` ESP-IDF's FreeRTOS supports pinning tasks to specific cores on dual-core variants, which — if the chosen variant is dual-core — is a reasonable way to physically isolate the control task from comms handling; confirm against the specific variant chosen `[TBD]`, since some ESP32 variants are single-core.
+- **Task structure**: a high-priority control task (sensor sampling, incline-compensation loop, mode/SAFE_HOLD logic) should run at a fixed, guaranteed rate, separated from lower-priority tasks like phone-link JSON parsing (now over a Wi-Fi socket rather than a UART, per `spec.md` §6.1) — so a slow or malformed packet parse can't introduce jitter into the control loop. `[VERIFY]` ESP-IDF's FreeRTOS supports pinning tasks to specific cores on dual-core variants, which — if the chosen variant is dual-core — is a reasonable way to physically isolate the control task from comms handling; confirm against the specific variant chosen `[TBD]`, since some ESP32 variants are single-core.
 - **Deterministic sampling**: current/voltage (and ideally IMU) sampling should be timer/ISR-triggered rather than sampled opportunistically inside a task loop, so sample timing doesn't jitter with whatever else the CPU is doing — this matters directly for the PWM-off-phase-gated sampling technique discussed in `spec.md` §7, which depends on sampling at a specific phase of the PWM cycle.
 - **Watchdog**: a hardware or software watchdog timer should force a defined fail-safe state (motors to zero, not a silent reset that leaves motors mid-command) if the control task hangs — this is the last line of defense underneath the SAFE_HOLD logic itself, for the case where SAFE_HOLD logic can't run because something has already gone more seriously wrong (e.g. a task deadlock).
 - **Fail-safe default**: on boot, and on any unhandled fault, the default output state is zero motor command and electromagnet off — never an unspecified/last-held state, which could be arbitrary garbage after a crash/reset.
@@ -110,4 +113,4 @@ The cross-cutting `SAFE_HOLD` interlock (not counted as a fourth mode, per the p
 
 ## 6. Cloud Summary (light — see `overview_cloud.md` for depth)
 
-EC2 runs SLAM Toolbox (mapping from relayed lidar scan + odometry) and Nav2 with a custom D*-Lite global planner (`plan.md` 2a.4), reachable over MQTT/TLS from the phone bridge. The whole stack is validated locally (Dockerized, same broker software, same message contracts) before any AWS resource exists, per the project's hard constraint. Full AWS topology, cost, and security detail is in `overview_cloud.md`.
+EC2 runs SLAM Toolbox (mapping from relayed range scan + odometry — the scan assembled on the ESP32 from a servo-swept single-point sensor, not a 2D lidar) and Nav2 with a custom D*-Lite global planner (`plan.md` 2a.4), reachable over MQTT/TLS from the phone bridge. The whole stack is validated locally (Dockerized, same broker software, same message contracts) before any AWS resource exists, per the project's hard constraint. Full AWS topology, cost, and security detail is in `overview_cloud.md`.

@@ -2,7 +2,7 @@
 
 ## Abstract
 
-A hobby-scale 4-wheel ground robot pairs a real-time ESP32 controller with an Android phone bridge/GUI and a cloud "brain" (AWS EC2 running SLAM Toolbox, Nav2, and a custom D*-Lite global planner) to deliver three operating modes — Manual, Autonomous, and Follow-me — plus an electromagnet actuator for small magnetic payload pickup. The system's defining control property is a closed-loop, autonomous incline-compensation controller: rather than relying on manual per-terrain tuning, the robot infers increased drive load from current/voltage sensing (a back-EMF-informed signal) and reallocates motor power in real time. This is enforced by a strict architectural split — the ESP32 owns all real-time control and safety locally; the cloud is used only for heavy math (mapping, global path planning) and is never in the safety-critical path.
+A hobby-scale 4-wheel ground robot pairs a real-time ESP32 controller with a handheld Android phone bridge/GUI (connected wirelessly, not robot-mounted) and a cloud "brain" (AWS EC2 running SLAM Toolbox, Nav2, and a custom D*-Lite global planner) to deliver three operating modes — Manual, Autonomous, and Follow-me — plus an electromagnet actuator for small magnetic payload pickup. The system's defining control property is a closed-loop, autonomous incline-compensation controller: rather than relying on manual per-terrain tuning, the robot infers increased drive load from current/voltage sensing (a back-EMF-informed signal) and reallocates motor power in real time. This is enforced by a strict architectural split — the ESP32 owns all real-time control and safety locally; the cloud is used only for heavy math (mapping, global path planning) and is never in the safety-critical path.
 
 ## Application
 
@@ -19,13 +19,15 @@ Intended as a low-cost platform for terrain-crossing payload retrieval (e.g. pic
 ## Architecture
 
 ```
-Phone (bridge) ──MQTT/TLS── EC2 instance, single public subnet, VPC
-                              │
-                              ├── Mosquitto broker (TLS + auth)
-                              ├── SLAM Toolbox  ← lidar scan + odom (relayed via phone)
-                              ├── Nav2 (costmaps, controller server, lifecycle mgmt)
-                              └── D*-Lite global planner (standalone node, see §2)
+ESP32 ──Wi-Fi (AP)── Phone (handheld bridge) ──MQTT/TLS── EC2 instance, single public subnet, VPC
+                                                              │
+                                                              ├── Mosquitto broker (TLS + auth)
+                                                              ├── SLAM Toolbox  ← range scan + odom (relayed via phone)
+                                                              ├── Nav2 (costmaps, controller server, lifecycle mgmt)
+                                                              └── D*-Lite global planner (standalone node, see §2)
 ```
+
+The scan SLAM Toolbox consumes is now assembled on the ESP32 from a single-point range sensor on a continuously sweeping servo (not a 2D lidar, dropped for cost — `spec.md` §4/§7) and relayed up through the ESP32↔phone Wi-Fi link before reaching the phone↔EC2 hop shown above; this doesn't change anything on the cloud side of the diagram, only the input rate/resolution SLAM Toolbox should be tuned to expect.
 
 Security group: MQTT(TLS) port + SSH (source-IP-restricted) only. No other inbound. IAM: a scoped least-privilege user/role, not root, not `AdministratorAccess`. Full ESP32/phone-side detail is in `overview_controls.md`; full interface contracts are in `spec.md` §6.
 
@@ -53,7 +55,7 @@ Security group: MQTT(TLS) port + SSH (source-IP-restricted) only. No other inbou
 
 ## 3. Scaling & Cost Tradeoffs
 
-At current scope (one robot, hobby use, intermittent operating sessions rather than 24/7 operation), the dominant cost driver is **EC2 uptime and instance size**, not data transfer — lidar/telemetry volumes at this scale are small relative to typical AWS data-transfer pricing tiers `[VERIFY: confirm against current AWS data-transfer pricing if this assumption is ever load-bearing for a cost estimate]`. The architecture doesn't need to scale out today, but the topic-namespacing already anticipated in `spec.md` §6.2 (`robot/{id}/...`) means a second robot could, in principle, share a broker and either share or get its own compute — that's a future decision, not one this plan needs to make now, and shouldn't be over-engineered for prematurely (see the project's general anti-premature-abstraction stance).
+At current scope (one robot, hobby use, intermittent operating sessions rather than 24/7 operation), the dominant cost driver is **EC2 uptime and instance size**, not data transfer — scan/telemetry volumes at this scale are small (smaller still now that scan data comes from a servo-swept single-point sensor rather than a spinning 2D lidar) relative to typical AWS data-transfer pricing tiers `[VERIFY: confirm against current AWS data-transfer pricing if this assumption is ever load-bearing for a cost estimate]`. The architecture doesn't need to scale out today, but the topic-namespacing already anticipated in `spec.md` §6.2 (`robot/{id}/...`) means a second robot could, in principle, share a broker and either share or get its own compute — that's a future decision, not one this plan needs to make now, and shouldn't be over-engineered for prematurely (see the project's general anti-premature-abstraction stance).
 
 **Cost controls, in priority order**:
 1. A Budgets alarm, configured *before* anything else in AWS setup — this is the actual backstop against the most likely real-world failure mode (an instance left running, not a security incident).
@@ -68,6 +70,7 @@ At current scope (one robot, hobby use, intermittent operating sessions rather t
 - **Transport**: MQTT **over TLS**, not plaintext — the local dev broker (`plan.md` 2a) can reasonably stay open/unauthenticated on localhost for convenience, but that default must not carry forward to the EC2 broker, which is reachable from the public internet.
 - **Auth**: username/password or certificate-based client auth on the broker. IP-restriction alone isn't sufficient here since the phone is often on cellular with a changing IP — auth is the real control, not network position.
 - **Exposed surface**: only the MQTT(TLS) port and SSH (source-IP-restricted) are open on the security group. No other inbound ports, no default-open management interfaces.
+- **The ESP32↔phone hop is a separate wireless surface from anything in this section**, and shouldn't be overlooked just because it's not cloud-side: the ESP32 now hosts its own Wi-Fi AP (`spec.md` §6.1, since the phone is handheld rather than robot-mounted) and must require WPA2/WPA3 auth. An open AP there would let anyone in range inject `mode_request`/`estop`/`magnet_trigger` commands directly at the ESP32 — upstream of, and independent from, the MQTT broker auth described above.
 - **IAM**: least-privilege scoped policy (§1), reviewed periodically for scope creep rather than granted broadly once "to get unblocked."
 - **Why this matters concretely**: an unauthenticated, internet-reachable broker would let anyone who finds the port inject fake telemetry, fake waypoints, or — more seriously — a fake `magnet_trigger` or spoofed mode-change command. Because the ESP32 is architected to never trust the cloud link for safety (`overview_controls.md` §3–4), a compromised broker can't directly cause an unsafe *physical* action outside of what the phone/ESP32 would otherwise accept as a normal command — but it could still cause nuisance behavior (unwanted electromagnet triggers, corrupted maps, bogus waypoints) and should not be treated as low-stakes just because it isn't in the direct safety path.
 
