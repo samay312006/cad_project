@@ -1,0 +1,282 @@
+/*
+ * drive_test.ino — keyboard drive bring-up test
+ *
+ * SCOPE: tethered bench test only. Verifies that both L298N boards, all four
+ * motors, and the ESP32 pin map actually work before any autonomy is layered on.
+ * Current sensors (INA219) are NOT used here — they aren't wired yet.
+ *
+ * NOT the real firmware. There is no SAFE_HOLD, no link-loss watchdog, and no
+ * mode state machine (see spec.md §5 / overview_controls.md §5 for what the real
+ * control core has to implement). Commands here are LATCHED: the bot keeps doing
+ * the last thing you told it until you press another key. Run it with the wheels
+ * OFF THE GROUND the first time.
+ *
+ * Usage: upload, open Serial Monitor at 115200 baud, set line ending to
+ * "No Line Ending", click into the input box, then press keys.
+ *
+ *   w / s     forward / reverse
+ *   a / d     spin left / spin right (skid-steer, sides counter-rotate)
+ *   q / e     arc left / arc right (inner side at half speed)
+ *   space / x stop
+ *   + / -     speed up / down (steps of 15)
+ *   t         run the wiring self-test: each motor alone, forward then reverse
+ *   ?         reprint this help
+ */
+
+// ---------------------------------------------------------------- pin map
+// LEFT L298N
+#define FL_EN  25
+#define FL_IN1 26
+#define FL_IN2 27
+#define RL_EN  32
+#define RL_IN1 33
+#define RL_IN2 14
+
+// RIGHT L298N
+#define FR_EN  13
+#define FR_IN1 15   // strapping pin: pulled low at boot silences the boot log
+#define FR_IN2 2    // strapping pin: also the onboard LED on most DevKits
+#define RR_EN  18
+#define RR_IN1 19
+#define RR_IN2 23
+
+// ---------------------------------------------------------------- tuning
+const int  PWM_FREQ_HZ = 1000;   // L298N is slow; 1 kHz is a safe default
+const int  PWM_BITS    = 8;      // duty range 0..255
+const int  SPEED_MIN   = 60;     // below this the L298N drop stalls the motors
+const int  SPEED_MAX   = 255;
+const int  SPEED_STEP  = 15;
+
+int speed = 180;                 // current commanded duty
+
+// Flip one of these to true if a wheel spins the wrong way. Software fix for a
+// swapped OUT1/OUT2 pair — no need to re-solder. Confirm with 't' first.
+struct Motor {
+  const char *name;
+  int  en, in1, in2;
+  bool invert;
+};
+
+Motor motors[4] = {
+  { "FL", FL_EN, FL_IN1, FL_IN2, false },
+  { "RL", RL_EN, RL_IN1, RL_IN2, false },
+  { "FR", FR_EN, FR_IN1, FR_IN2, false },
+  { "RR", RR_EN, RR_IN1, RR_IN2, false },
+};
+const int FL = 0, RL = 1, FR = 2, RR = 3;
+
+// ---------------------------------------------------------------- PWM shim
+// ESP32 Arduino core 3.x attaches PWM per pin; 2.x uses explicit channels.
+void pwmSetup(int pin, int ch) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  (void)ch;
+  ledcAttach(pin, PWM_FREQ_HZ, PWM_BITS);
+#else
+  ledcSetup(ch, PWM_FREQ_HZ, PWM_BITS);
+  ledcAttachPin(pin, ch);
+#endif
+}
+
+void pwmWrite(int pin, int ch, int duty) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  (void)ch;
+  ledcWrite(pin, duty);
+#else
+  (void)pin;
+  ledcWrite(ch, duty);
+#endif
+}
+
+// Release a pin from the PWM peripheral so it can be driven as a plain GPIO.
+void pwmDetach(int pin) {
+#if ESP_ARDUINO_VERSION_MAJOR >= 3
+  ledcDetach(pin);
+#else
+  ledcDetachPin(pin);
+#endif
+}
+
+// ---------------------------------------------------------------- motor ctl
+// duty: -255..255. Negative = reverse. Zero = coast (both IN low, EN low).
+void setMotor(int m, int duty) {
+  Motor &mo = motors[m];
+  if (mo.invert) duty = -duty;
+
+  bool fwd = duty >= 0;
+  int  mag = abs(duty);
+  if (mag > SPEED_MAX) mag = SPEED_MAX;
+
+  if (mag == 0) {
+    digitalWrite(mo.in1, LOW);
+    digitalWrite(mo.in2, LOW);
+  } else {
+    digitalWrite(mo.in1, fwd ? HIGH : LOW);
+    digitalWrite(mo.in2, fwd ? LOW  : HIGH);
+  }
+  pwmWrite(mo.en, m, mag);
+}
+
+// Both wheels on a side always get the same command — the chassis is skid-steer,
+// so a side is one logical drive channel (this is also why current sensing is
+// per-side; see spec.md §6.1).
+void drive(int left, int right) {
+  setMotor(FL, left);
+  setMotor(RL, left);
+  setMotor(FR, right);
+  setMotor(RR, right);
+}
+
+void stopAll() {
+  drive(0, 0);
+}
+
+// ---------------------------------------------------------------- probe mode
+// Static-level probe for tracing a motor that won't turn. PWM is detached and EN
+// is driven as a plain DC high, so the L298N OUT pair reads as steady DC on a
+// multimeter instead of a 1 kHz square wave the meter would average into
+// something meaningless. One motor at a time, latched until you stop it.
+int  probeSel = -1;      // motor under probe, -1 = none
+bool probeOn  = false;
+
+void probeExit() {
+  if (!probeOn) return;
+  Motor &mo = motors[probeSel];
+  digitalWrite(mo.in1, LOW);
+  digitalWrite(mo.in2, LOW);
+  digitalWrite(mo.en,  LOW);
+  pwmSetup(mo.en, probeSel);       // hand the pin back to the PWM peripheral
+  probeOn  = false;
+  probeSel = -1;
+  stopAll();
+  Serial.println(F("probe off - PWM re-attached"));
+}
+
+void probeEnter(int m) {
+  probeExit();
+  Motor &mo = motors[m];
+  probeSel = m;
+  probeOn  = true;
+
+  pwmDetach(mo.en);
+  pinMode(mo.en, OUTPUT);
+  digitalWrite(mo.en,  HIGH);
+  digitalWrite(mo.in1, HIGH);
+  digitalWrite(mo.in2, LOW);
+
+  Serial.printf("\n-- probe: %s held static, no PWM --\n", mo.name);
+  Serial.println(F("   Black meter lead on ESP32 GND for these three:"));
+  Serial.printf ("     EN  GPIO%-2d = HIGH  expect ~3.3V\n", mo.en);
+  Serial.printf ("     IN1 GPIO%-2d = HIGH  expect ~3.3V\n", mo.in1);
+  Serial.printf ("     IN2 GPIO%-2d = LOW   expect ~0V\n",   mo.in2);
+  Serial.println(F("   If any of those three is wrong, the fault is the ESP32"));
+  Serial.println(F("   pin or the jumper to it - stop there."));
+  Serial.println(F("   If all three are right, meter this motor's L298N OUT pair:"));
+  Serial.println(F("     ~supply minus 2V -> driver works, suspect motor or leads"));
+  Serial.println(F("     ~0V              -> L298N not driving; check its 5V"));
+  Serial.println(F("                         logic rail and the common ground"));
+  Serial.println(F("   space stops. 1-4 probes another motor.\n"));
+}
+
+// ---------------------------------------------------------------- self-test
+// Spins each motor alone so you can confirm which physical wheel responds and
+// whether it turns the right way. Fix any wrong-way wheel via its `invert` flag.
+void selfTest() {
+  Serial.println(F("\n-- wiring self-test: each motor alone --"));
+  for (int m = 0; m < 4; m++) {
+    Serial.printf("  %s forward...\n", motors[m].name);
+    setMotor(m, speed);
+    delay(1200);
+    setMotor(m, 0);
+    delay(400);
+
+    Serial.printf("  %s reverse...\n", motors[m].name);
+    setMotor(m, -speed);
+    delay(1200);
+    setMotor(m, 0);
+    delay(600);
+  }
+  Serial.println(F("-- self-test done. Any wheel spinning backwards?"));
+  Serial.println(F("   Set invert=true for it in the motors[] table.\n"));
+}
+
+void help() {
+  Serial.println(F("\n=== drive test ==="));
+  Serial.println(F("  w/s  forward / reverse"));
+  Serial.println(F("  a/d  spin left / spin right"));
+  Serial.println(F("  q/e  arc left / arc right"));
+  Serial.println(F("  spc  stop      (x also stops)"));
+  Serial.println(F("  +/-  speed     t  self-test     ?  help"));
+  Serial.println(F("  1-4  probe FL/RL/FR/RR: static levels for a multimeter"));
+  Serial.printf ("  speed = %d / %d\n\n", speed, SPEED_MAX);
+}
+
+// ---------------------------------------------------------------- lifecycle
+void setup() {
+  // Kill the H-bridges FIRST, before anything else can run. The direction pins
+  // on the right board are strapping pins and may sit at an arbitrary level
+  // through reset — that's harmless only while EN is held low.
+  int enPins[4] = { FL_EN, RL_EN, FR_EN, RR_EN };
+  for (int i = 0; i < 4; i++) {
+    pinMode(enPins[i], OUTPUT);
+    digitalWrite(enPins[i], LOW);
+  }
+
+  for (int m = 0; m < 4; m++) {
+    pinMode(motors[m].in1, OUTPUT);
+    pinMode(motors[m].in2, OUTPUT);
+    digitalWrite(motors[m].in1, LOW);
+    digitalWrite(motors[m].in2, LOW);
+    pwmSetup(motors[m].en, m);
+  }
+  stopAll();
+
+  Serial.begin(115200);
+  delay(300);
+  help();
+}
+
+void loop() {
+  if (!Serial.available()) return;
+
+  char c = Serial.read();
+  if (c == '\n' || c == '\r') return;
+
+  // Any motion command leaves probe mode first, so EN gets its PWM back.
+  if (probeOn && strchr("wsadqe x+-=_t", c)) probeExit();
+
+  switch (c) {
+    case 'w': drive( speed,  speed);         Serial.println(F("forward"));    break;
+    case 's': drive(-speed, -speed);         Serial.println(F("reverse"));    break;
+    case 'a': drive(-speed,  speed);         Serial.println(F("spin left"));  break;
+    case 'd': drive( speed, -speed);         Serial.println(F("spin right")); break;
+    case 'q': drive( speed / 2,  speed);     Serial.println(F("arc left"));   break;
+    case 'e': drive( speed,  speed / 2);     Serial.println(F("arc right"));  break;
+
+    case ' ':
+    case 'x': stopAll();                     Serial.println(F("STOP"));       break;
+
+    case '+':
+    case '=':
+      speed = min(speed + SPEED_STEP, SPEED_MAX);
+      Serial.printf("speed = %d\n", speed);
+      break;
+
+    case '-':
+    case '_':
+      speed = max(speed - SPEED_STEP, SPEED_MIN);
+      Serial.printf("speed = %d\n", speed);
+      break;
+
+    case '1': probeEnter(FL); break;
+    case '2': probeEnter(RL); break;
+    case '3': probeEnter(FR); break;
+    case '4': probeEnter(RR); break;
+
+    case 't': stopAll(); selfTest(); break;
+    case '?': help();               break;
+
+    default:
+      Serial.printf("? '%c' — press ? for help\n", c);
+      break;
+  }
+}
