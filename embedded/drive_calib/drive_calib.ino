@@ -50,7 +50,11 @@ const int PWM_BITS    = 8;
 // duty puts ~10 V across them. This sketch drives real motors, so the same
 // clamp drive_test uses lives here too - inside pwmWrite(), the one choke
 // point no measurement routine can route around.
-const float V_MOTOR_MAX = 5.0f;
+// 6.0 V is the datasheet maximum. Sitting at 5.5 leaves room for error in
+// v0Drop, because the cap is V_MOTOR_MAX / (V_bus - v0Drop): overestimate v0
+// and the cap comes out too permissive and the motors get more than intended.
+// Raise to 6.0 once L has measured the real V0.
+const float V_MOTOR_MAX = 5.5f;
 
 float vBusManual = 12.6f;   // used when no divider is fitted; charged 3S
 float vbusScale  = 5.545f;  // (100k + 22k) / 22k, trimmed against a multimeter
@@ -149,6 +153,22 @@ void drive(int l, int r) { setSide(LEFT, l); setSide(RIGHT, r); }
 void stopAll()           { drive(0, 0); }
 
 // ---------------------------------------------------------------- sensing
+// The INA219's default conversion takes 532 us and the PWM period is 1000 us,
+// so a default reading catches a random slice of the on/off cycle - samples
+// alias against the PWM instead of averaging over it. Config register 0x3FFF
+// selects 128-sample averaging on both channels: one reading then spans about
+// 68 ms, or ~68 PWM cycles, which is a true duty-cycle average.
+//
+// Must be called AFTER setCalibration_32V_2A(), which writes this register
+// itself. getCurrent_mA() only rewrites the calibration register, not this one.
+void setInaAveraging(uint8_t addr) {
+  Wire.beginTransmission(addr);
+  Wire.write(0x00);     // config register
+  Wire.write(0x3F);     // 32V range, /8 gain, 128-sample avg both channels,
+  Wire.write(0xFF);     // continuous shunt+bus
+  Wire.endTransmission();
+}
+
 void sensorsBegin() {
   Wire.begin(I2C_SDA, I2C_SCL);
   for (int i = 0; i < 2; i++) {
@@ -160,7 +180,9 @@ void sensorsBegin() {
       continue;
     }
     cs.dev->setCalibration_32V_2A();
-    Serial.printf("INA219 %-5s : ok at 0x%02X\n", cs.name, cs.addr);
+    setInaAveraging(cs.addr);
+    Serial.printf("INA219 %-5s : ok at 0x%02X (128-sample averaging)\n",
+                  cs.name, cs.addr);
   }
 }
 
@@ -236,14 +258,15 @@ bool fitLine(const float *x, const float *y, int n,
 // and the residual says whether the model actually holds.
 //
 // Duties start at 0.18 because below roughly V0/V_bus the bridge does not
-// conduct at all, and stop at 0.40 to keep locked-rotor current modest.
+// conduct at all, and stop at 0.50 - far enough apart that the currents differ
+// clearly, which is what the fit needs, while staying under the clamp.
 //
 // Both raw and duty-normalized current are fitted. Which one is correct depends
 // on whether motor current keeps circulating through the shunt during the PWM
 // off-time, and that depends on the freewheel path - so it is measured here
 // rather than assumed. Use whichever fit has the smaller residual.
 void lockedRotorSweep(int s) {
-  const int counts[5] = { 46, 60, 74, 88, 102 };   // 0.18 .. 0.40
+  const int counts[5] = { 46, 66, 87, 107, 128 };  // 0.18 .. 0.50
   float vApp[5], iRaw[5], iNorm[5];
 
   Serial.printf("\n-- locked rotor: %s --\n", sides[s].name);
@@ -252,14 +275,18 @@ void lockedRotorSweep(int s) {
   delay(4000);
 
   float vBus = readBusVoltage();
-  Serial.printf("   V_bus %.2f V\n", vBus);
+  Serial.printf("   V_bus %.2f V (%s)\n", vBus, useDivider ? "divider" : "manual");
+  if (!useDivider)
+    Serial.println(F("   ^ hand-entered. If that is not the real pack voltage,"
+                     " press x now, set it with v, and start over."));
   Serial.println(F("    duty   V_app    I_raw   I_norm"));
 
   for (int i = 0; i < 5; i++) {
     setSide(s, counts[i]);
-    delay(250);                       // settle; keep each burst short
+    delay(250);                       // motor settle
+    delay(150);                       // plus one full 68 ms conversion, discarded
     float rl, rr, nl, nr;
-    averageCurrents(6, 10, &rl, &rr, &nl, &nr);
+    averageCurrents(6, 80, &rl, &rr, &nl, &nr);   // 80 ms > 68 ms conversion
     setSide(s, 0);
 
     float d = counts[i] / 255.0f;
@@ -267,9 +294,20 @@ void lockedRotorSweep(int s) {
     iRaw[i]  = (s == LEFT) ? rl : rr;
     iNorm[i] = (s == LEFT) ? nl : nr;
     Serial.printf("   %.3f  %6.3f  %7.4f  %7.4f\n", d, vApp[i], iRaw[i], iNorm[i]);
-    delay(700);                       // let it cool between points
+    delay(900);                       // let it cool between points
   }
   stopAll();
+
+  // A locked motor is a resistor: current must rise with applied voltage. If it
+  // does not, the fit below is meaningless no matter how good its residual is.
+  int drops = 0;
+  for (int i = 1; i < 5; i++) if (iRaw[i] < iRaw[i-1]) drops++;
+  if (drops > 0) {
+    Serial.printf("\n   BAD DATA: raw current fell %d time(s) as voltage rose.\n",
+                  drops);
+    Serial.println(F("   A locked motor cannot do that. Most likely a wheel"));
+    Serial.println(F("   turned during the sweep. Re-grip and run L again."));
+  }
 
   float rawR = 0, rawV0 = 0, rawRms = 0;
   float nrmR = 0, nrmV0 = 0, nrmRms = 0;
@@ -314,7 +352,11 @@ void flatGroundTable() {
   delay(4000);
 
   int cap = dutyMaxCounts();
-  int lo  = 51;                       // 0.20
+  // Start at 0.28, not 0.20: below roughly 0.235 the L298N drop leaves too
+  // little to overcome friction and the robot sits still (drive_test's
+  // SPEED_MIN says the same). A stationary row records zero back-EMF and
+  // poisons the baseline it is supposed to define.
+  int lo  = 71;                       // 0.28
   if (cap <= lo + 7) { Serial.println(F("   duty cap too low - check V_bus")); return; }
 
   Serial.println(F("    duty    I_L     I_R    bemfL   bemfR"));

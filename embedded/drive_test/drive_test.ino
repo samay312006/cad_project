@@ -27,8 +27,13 @@
  *   + / -     speed up / down (steps of 15)
  *   t         self-test: each side alone, forward then reverse
  *   1 / 2     probe LEFT / RIGHT with static levels (for a multimeter)
+ *   c         read drive current from the INA219s
+ *   i         I2C bus scan (use this to confirm sensor addresses)
  *   ?         reprint this help
  */
+
+#include <Wire.h>
+#include <Adafruit_INA219.h>
 
 // ---------------------------------------------------------------- pin map
 // ONE L298N. Channel A drives OUT1/OUT2, channel B drives OUT3/OUT4.
@@ -41,6 +46,20 @@
 //   GPIO33   --->  IN3          left  OUT3  -> left  motors NEGATIVE
 //   GPIO14   --->  IN4          left  OUT4  -> left  motors POSITIVE
 //   GND      --->  GND          MANDATORY common ground
+//
+// INA219 current sensors (x2, one per drive channel). Both share one I2C bus;
+// only the address differs. Logic side, identical for both boards:
+//   ESP32 3V3  ---> VCC
+//   ESP32 GND  ---> GND
+//   GPIO21     ---> SDA
+//   GPIO22     ---> SCL
+//
+// Shunt side: the L298N feeds BOTH bridges from one VS pin, so there is no
+// per-channel supply feed to sense. Each shunt therefore goes in that channel's
+// motor RETURN lead:
+//   LEFT  0x40 : cut OUT3 -> left  motors(-).  OUT3 to VIN+, VIN- to motors(-)
+//   RIGHT 0x41 : cut OUT1 -> right motors(-).  OUT1 to VIN+, VIN- to motors(-)
+// If a side reads negative when driving forward, set its invert flag below.
 //
 // These six pins deliberately avoid GPIO2 and GPIO15 (boot strapping pins the
 // old right-hand board used). Nothing here can stop the ESP32 booting.
@@ -79,6 +98,48 @@ Side sides[2] = {
   { "RIGHT",  ENA,  IN2,   IN1,   false },   // OUT2 = +, OUT1 = -
 };
 const int LEFT = 0, RIGHT = 1;
+
+// ------------------------------------------------------- current sensing
+// Exactly two sensors, one per drive channel - that is all this topology can
+// observe, since both motors on a side are paralleled onto one channel.
+// Both boards are now fitted. A slot whose `present` is false, or whose board
+// fails to answer at boot, is skipped cleanly rather than hanging the sketch.
+#define I2C_SDA 21
+#define I2C_SCL 22
+
+Adafruit_INA219 ina_left (0x40);   // no solder jumpers
+Adafruit_INA219 ina_right(0x41);   // A0 bridged
+
+struct CurrentSensor {
+  const char      *name;
+  Adafruit_INA219 *dev;
+  uint8_t          addr;
+  bool             present;   // false = not fitted, skipped
+  bool             invert;    // true if forward drive reads negative
+  float            amps;      // last raw reading
+  float            ampsNorm;  // raw / duty - see readCurrents()
+};
+
+CurrentSensor isense[2] = {
+  //  name     device        addr  present invert  amps normd
+  { "LEFT",  &ina_left,  0x40, true,   false,  0.0f, 0.0f },
+  { "RIGHT", &ina_right, 0x41, true,   false,  0.0f, 0.0f },
+};
+
+// Magnitude of the duty currently commanded to each side, 0..255. readCurrents()
+// needs it, see the normalization note there.
+int lastDuty[2] = { 0, 0 };
+
+// Below this duty the I/D division amplifies noise faster than it corrects, so
+// the normalized value is reported as unavailable rather than as garbage.
+const float DUTY_NORM_MIN = 0.15f;
+
+// Live current stream. On from boot so readings scroll without being asked for;
+// `m` toggles it off when the scroll gets in the way of reading other output.
+// Non-blocking, so driving still works while it runs.
+bool     monitorOn   = true;
+uint32_t monitorNext = 0;
+const uint32_t MONITOR_MS = 250;
 
 // ---------------------------------------------------------------- PWM shim
 // ESP32 Arduino core 3.x attaches PWM per pin; 2.x uses explicit channels.
@@ -129,6 +190,7 @@ void setSide(int s, int duty) {
     digitalWrite(sd.inRev, fwd ? LOW  : HIGH);
   }
   pwmWrite(sd.en, s, mag);
+  lastDuty[s] = mag;
 }
 
 void drive(int left, int right) {
@@ -187,6 +249,104 @@ void probeEnter(int s) {
   Serial.println(F("   space stops. 1/2 probes the other side.\n"));
 }
 
+void sensorsBegin() {
+  Wire.begin(I2C_SDA, I2C_SCL);
+  for (int i = 0; i < 2; i++) {
+    CurrentSensor &cs = isense[i];
+    if (!cs.present) {
+      Serial.printf("INA219 %-5s : slot disabled in isense[]\n", cs.name);
+      continue;
+    }
+    if (!cs.dev->begin()) {
+      cs.present = false;
+      Serial.printf("INA219 %-5s : NOT FOUND at 0x%02X - press i to scan the bus\n",
+                    cs.name, cs.addr);
+      continue;
+    }
+    // Default range: calibrated to 2A, counter overflows at 3.2A. Two motors in
+    // parallel WILL exceed that near stall - see the note in help().
+    cs.dev->setCalibration_32V_2A();
+    Serial.printf("INA219 %-5s : ok at 0x%02X\n", cs.name, cs.addr);
+  }
+}
+
+// PWM on the EN pin coasts the bridge during off-time, so shunt current is ~0
+// for that fraction of every cycle and the averaged reading comes back as
+// roughly (duty x actual motor current). Dividing by duty recovers the real
+// motor current. Skipping this step puts the duty term on BOTH sides of any
+// closed loop built on it - raise duty, read more current, raise duty again -
+// which is positive feedback with no load change at all. Always control on
+// ampsNorm, never on amps.
+void readCurrents() {
+  for (int i = 0; i < 2; i++) {
+    CurrentSensor &cs = isense[i];
+    if (!cs.present) { cs.amps = NAN; cs.ampsNorm = NAN; continue; }
+
+    float a = cs.dev->getCurrent_mA() / 1000.0f;
+    if (cs.invert) a = -a;
+    cs.amps = a;
+
+    float d = lastDuty[i] / 255.0f;
+    cs.ampsNorm = (d >= DUTY_NORM_MIN) ? (a / d) : NAN;
+  }
+}
+
+void printCurrents() {
+  readCurrents();
+  Serial.println(F("\n-- drive current --"));
+  for (int i = 0; i < 2; i++) {
+    CurrentSensor &cs = isense[i];
+    if (!cs.present) { Serial.printf("  %-5s : absent\n", cs.name); continue; }
+    Serial.printf("  %-5s : raw %6.3f A   duty %3d", cs.name, cs.amps, lastDuty[i]);
+    if (isnan(cs.ampsNorm)) Serial.println(F("   norm    --   (duty too low)"));
+    else                    Serial.printf("   norm %6.3f A\n", cs.ampsNorm);
+  }
+  Serial.println();
+}
+
+// One compact line per sample, for the `m` stream. Same numbers printCurrents()
+// shows, laid out to be readable as it scrolls.
+void printCurrentsLine() {
+  readCurrents();
+  Serial.print(F("I: "));
+  for (int i = 0; i < 2; i++) {
+    CurrentSensor &cs = isense[i];
+    if (!cs.present) { Serial.printf("%-5s absent        ", cs.name); continue; }
+    Serial.printf("%-5s %6.3fA d%3d ", cs.name, cs.amps, lastDuty[i]);
+    if (isnan(cs.ampsNorm)) Serial.print(F("n   --   "));
+    else                    Serial.printf("n %6.3fA ", cs.ampsNorm);
+    Serial.print(F("  "));
+  }
+  Serial.println();
+}
+
+void i2cScan() {
+  Serial.println(F("\n-- I2C scan --"));
+  int found = 0;
+  for (uint8_t a = 1; a < 127; a++) {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) {
+      Serial.printf("  device at 0x%02X\n", a);
+      found++;
+    }
+  }
+  if (!found) Serial.println(F("  nothing found - check VCC / GND / SDA / SCL"));
+  Serial.println();
+}
+
+// Prints the driven side next to the idle one. During a single-side spin the
+// driven sensor should climb and the idle one sit near zero; anything else means
+// the shunts are in the wrong channels or one is not in the motor return lead.
+void reportSideCurrent(int driven) {
+  int idle = 1 - driven;
+  Serial.printf("    driven %-5s ", isense[driven].name);
+  if (isense[driven].present) Serial.printf("%6.3f A", isense[driven].amps);
+  else                        Serial.print(F("  absent"));
+  Serial.printf("   idle %-5s ", isense[idle].name);
+  if (isense[idle].present)   Serial.printf("%6.3f A\n", isense[idle].amps);
+  else                        Serial.println(F("  absent"));
+}
+
 // ---------------------------------------------------------------- self-test
 // Spins each side alone so you can confirm which physical side responds and
 // whether it turns the right way. Fix a wrong-way side via its `invert` flag.
@@ -195,19 +355,30 @@ void selfTest() {
   for (int s = 0; s < 2; s++) {
     Serial.printf("  %s forward...\n", sides[s].name);
     setSide(s, speed);
-    delay(1200);
+    delay(600);          // let the motor reach steady state before sampling
+    readCurrents();
+    reportSideCurrent(s);
+    delay(600);
     setSide(s, 0);
     delay(400);
 
     Serial.printf("  %s reverse...\n", sides[s].name);
     setSide(s, -speed);
-    delay(1200);
+    delay(600);
+    readCurrents();
+    reportSideCurrent(s);
+    delay(600);
     setSide(s, 0);
     delay(600);
   }
   Serial.println(F("-- done. Did each side turn the way it was named?"));
   Serial.println(F("   If a side ran backwards, set invert=true for it in the"));
-  Serial.println(F("   sides[] table and re-upload.\n"));
+  Serial.println(F("   sides[] table and re-upload."));
+  Serial.println(F("   Each side should draw current ONLY while it is the one"));
+  Serial.println(F("   named as spinning. If the other sensor moves instead,"));
+  Serial.println(F("   the two shunts are swapped between the channels."));
+  Serial.println(F("   A sign that stays negative means invert=true in"));
+  Serial.println(F("   isense[] for that sensor.\n"));
 }
 
 void help() {
@@ -218,6 +389,8 @@ void help() {
   Serial.println(F("  spc  stop      (x also stops)"));
   Serial.println(F("  +/-  speed     t  self-test     ?  help"));
   Serial.println(F("  1/2  probe LEFT / RIGHT: static levels for a multimeter"));
+  Serial.println(F("  c    read drive current    i  I2C bus scan"));
+  Serial.println(F("  m    current stream on/off (ON at boot, keeps driving)"));
   Serial.printf ("  speed = %d / %d\n", speed, SPEED_MAX);
   Serial.println(F("  NOTE: 2 motors per channel - do not stall the wheels.\n"));
 }
@@ -242,10 +415,16 @@ void setup() {
 
   Serial.begin(115200);
   delay(300);
+  sensorsBegin();
   help();
 }
 
 void loop() {
+  if (monitorOn && (int32_t)(millis() - monitorNext) >= 0) {
+    monitorNext = millis() + MONITOR_MS;
+    printCurrentsLine();
+  }
+
   if (!Serial.available()) return;
 
   char c = Serial.read();
@@ -279,6 +458,15 @@ void loop() {
 
     case '1': probeEnter(LEFT);  break;
     case '2': probeEnter(RIGHT); break;
+
+    case 'c': printCurrents(); break;
+    case 'i': i2cScan();       break;
+
+    case 'm':
+      monitorOn   = !monitorOn;
+      monitorNext = millis();
+      Serial.printf("current stream %s\n", monitorOn ? "ON" : "off");
+      break;
 
     case 't': stopAll(); selfTest(); break;
     case '?': help();               break;
