@@ -30,7 +30,6 @@
 
 #include <Wire.h>
 #include <Adafruit_INA219.h>
-#include "fit.h"
 
 #define ENA 25
 #define IN1 26
@@ -202,6 +201,31 @@ void i2cScan() {
   Serial.println();
 }
 
+// ------------------------------------------------------------- line fit
+// Least squares of y = intercept + slope*x, plus the RMS residual so a
+// non-linear result is visible rather than silently averaged away.
+//
+// Results come back through pointers rather than a struct: Arduino generates
+// function prototypes above the sketch body, so a custom return type would be
+// referenced before it is declared and the build fails.
+bool fitLine(const float *x, const float *y, int n,
+             float *slope, float *intercept, float *rms) {
+  if (n < 2) return false;
+  float sx = 0, sy = 0, sxx = 0, sxy = 0;
+  for (int i = 0; i < n; i++) { sx += x[i]; sy += y[i]; sxx += x[i]*x[i]; sxy += x[i]*y[i]; }
+  float den = n * sxx - sx * sx;
+  if (fabsf(den) < 1e-9f) return false;
+  *slope     = (n * sxy - sx * sy) / den;
+  *intercept = (sy - *slope * sx) / n;
+  float acc = 0;
+  for (int i = 0; i < n; i++) {
+    float e = y[i] - (*intercept + *slope * x[i]);
+    acc += e * e;
+  }
+  *rms = sqrtf(acc / n);
+  return true;
+}
+
 // ------------------------------------------------------- locked rotor
 // With the rotor held, the motor generates no back-EMF, so every volt goes
 // into the bridge drop and the winding resistance:
@@ -247,33 +271,33 @@ void lockedRotorSweep(int s) {
   }
   stopAll();
 
-  Fit fRaw  = fitLine(iRaw,  vApp, 5);
-  Fit fNorm = fitLine(iNorm, vApp, 5);
+  float rawR = 0, rawV0 = 0, rawRms = 0;
+  float nrmR = 0, nrmV0 = 0, nrmRms = 0;
+  bool okRaw = fitLine(iRaw,  vApp, 5, &rawR, &rawV0, &rawRms);
+  bool okNrm = fitLine(iNorm, vApp, 5, &nrmR, &nrmV0, &nrmRms);
 
   Serial.println(F("\n   fit against RAW current:"));
-  if (fRaw.ok)
-    Serial.printf("     R_tot %.4f ohm   V0 %.4f V   residual %.4f V\n",
-                  fRaw.slope, fRaw.intercept, fRaw.rms);
-  else Serial.println(F("     failed - currents too close together"));
+  if (okRaw) Serial.printf("     R_tot %.4f ohm   V0 %.4f V   residual %.4f V\n",
+                           rawR, rawV0, rawRms);
+  else       Serial.println(F("     failed - currents too close together"));
 
   Serial.println(F("   fit against NORMALIZED current:"));
-  if (fNorm.ok)
-    Serial.printf("     R_tot %.4f ohm   V0 %.4f V   residual %.4f V\n",
-                  fNorm.slope, fNorm.intercept, fNorm.rms);
-  else Serial.println(F("     failed - currents too close together"));
+  if (okNrm) Serial.printf("     R_tot %.4f ohm   V0 %.4f V   residual %.4f V\n",
+                           nrmR, nrmV0, nrmRms);
+  else       Serial.println(F("     failed - currents too close together"));
 
-  if (fRaw.ok && fNorm.ok) {
-    bool rawWins = fRaw.rms < fNorm.rms;
+  if (okRaw && okNrm) {
+    bool rawWins = rawRms < nrmRms;
+    float bR  = rawWins ? rawR  : nrmR;
+    float bV0 = rawWins ? rawV0 : nrmV0;
     Serial.printf("\n   -> use the %s fit (smaller residual)\n",
                   rawWins ? "RAW" : "NORMALIZED");
-    const Fit &best = rawWins ? fRaw : fNorm;
-    Serial.printf("   -> o%.4f    r%.4f\n", best.intercept, best.slope);
-    if (best.intercept < 0.5f || best.intercept > 3.5f)
+    Serial.printf("   -> o%.4f    r%.4f\n", bV0, bR);
+    if (bV0 < 0.5f || bV0 > 3.5f)
       Serial.println(F("   WARNING: V0 outside 0.5-3.5 V. Did a wheel turn?"));
-    if (best.slope <= 0.0f || best.slope > 12.0f)
+    if (bR <= 0.0f || bR > 12.0f)
       Serial.println(F("   WARNING: R_tot looks wrong. Redo the measurement."));
-    Serial.printf("   implied stall current at 6 V: %.2f A\n",
-                  (6.0f - best.intercept) / best.slope);
+    Serial.printf("   implied stall current at 6 V: %.2f A\n", (6.0f - bV0) / bR);
   }
   Serial.println();
 }
