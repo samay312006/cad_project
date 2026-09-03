@@ -49,6 +49,7 @@
       connected = true;
       setStatus("connected");
       setWarning("");
+      if (dragging) startKeepalive();
     };
 
     ws.onclose = () => {
