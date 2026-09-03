@@ -9,6 +9,7 @@ discussion log — details belong in `spec.md`/`plan.md` or your own commits/PRs
 |---|---|---|---|---|
 | 3 | Single-point range sensor + servo BOM (`[TBD]` in spec) not chosen — sensor sample time and servo slew speed are unknown, so achievable scan rate/resolution is unknown | Both — embedded can't finalize driver/timing code; cloud/GUI can't set realistic SLAM Toolbox scan-rate expectations or Follow-me acceptance criteria (`spec.md` §8 Follow-me/SLAM rows are explicitly left open pending this) | Human (BOM decision) | 2026-08-27 |
 | 4 | MQTT broker TLS/auth credential format for EC2 (`plan.md` 2b.3) not yet defined | Cloud/GUI engineer only, not a cross-blocker yet — flagged so it doesn't get skipped before 2c integration | Cloud/GUI engineer | 2026-08-27 |
+| 6 | Incline-compensation telemetry fields (`spec.md` §6.1) — the approved design adds `boost_pct` (float, 0.0–0.5) and `compensating` (bool) to the telemetry message so the GUI can indicate when the ESP32 is boosting drive power. Design approved but **not yet written into §6.1**; fields do not exist on the wire yet | Cloud/GUI engineer — don't bind a dashboard to the current §6.1 shape without accounting for these two additive fields. Additive only, nothing renamed or removed | Embedded engineer (to land the §6.1 edit) | 2026-09-03 |
 
 ## Recently resolved
 
