@@ -1,0 +1,168 @@
+:root {
+  --bg: #04080a;
+  --teal: #2de2c8;
+  --teal-dim: rgba(45, 226, 200, 0.25);
+  --orange: #ff8a3d;
+  --red: #ff4d4d;
+  --panel-bg: rgba(10, 24, 26, 0.6);
+  --text: #d9fff6;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.hud {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-around;
+  width: 100vw;
+  height: 100vh;
+  padding: 16px;
+}
+
+.panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--teal-dim);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  min-width: 40vw;
+  height: 90vh;
+  justify-content: center;
+}
+
+/* ---- control panel ---- */
+.status-ring {
+  width: min(40vh, 40vw);
+  height: min(40vh, 40vw);
+  border-radius: 50%;
+  border: 3px solid var(--teal-dim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 200ms, box-shadow 200ms;
+}
+
+.status-ring.status-connected {
+  border-color: var(--teal);
+  box-shadow: 0 0 24px var(--teal-dim);
+}
+
+.status-ring.status-disconnected,
+.status-ring.status-stopped {
+  border-color: var(--red);
+  box-shadow: 0 0 24px rgba(255, 77, 77, 0.35);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.5; }
+}
+
+.joystick-base {
+  position: relative;
+  width: 70%;
+  height: 70%;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,138,61,0.15), transparent 70%);
+  border: 2px solid var(--orange);
+  touch-action: none;
+}
+
+.joystick-puck {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 28%;
+  height: 28%;
+  margin: -14% 0 0 -14%;
+  border-radius: 50%;
+  background: var(--teal);
+  box-shadow: 0 0 16px var(--teal);
+  pointer-events: none;
+}
+
+.speed-cap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  letter-spacing: 0.1em;
+}
+
+.warning {
+  min-height: 1.2em;
+  color: var(--red);
+  font-weight: bold;
+  letter-spacing: 0.1em;
+}
+
+/* ---- telemetry panel ---- */
+.telemetry-dial {
+  width: min(50vh, 40vw);
+  height: min(50vh, 40vw);
+}
+
+.dial-ring        { fill: none; stroke: var(--teal-dim); stroke-width: 2; }
+.dial-ring-inner  { fill: none; stroke: var(--teal-dim); stroke-width: 1; }
+
+.arc {
+  fill: none;
+  stroke-width: 6;
+  stroke-linecap: round;
+  transform: rotate(-90deg);
+  transform-origin: 100px 100px;
+  transition: stroke-dashoffset 200ms linear;
+}
+.arc-left  { stroke: var(--teal); }
+.arc-right { stroke: var(--orange); }
+
+.dial-label { fill: var(--teal-dim); font-size: 10px; letter-spacing: 0.2em; }
+.dial-value { fill: var(--text); font-size: 18px; }
+.dial-sub   { fill: var(--teal-dim); font-size: 10px; }
+
+.battery-gauge {
+  width: 24px;
+  height: 120px;
+  border: 2px solid var(--red);
+  border-radius: 4px;
+  display: flex;
+  flex-direction: column-reverse;
+  overflow: hidden;
+  position: relative;
+}
+
+.battery-fill {
+  background: linear-gradient(to top, var(--red), var(--orange));
+  height: 0%;
+  transition: height 300ms ease;
+}
+
+#batteryLabel {
+  position: absolute;
+  bottom: -20px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+  .hud { flex-direction: column; }
+  .panel { width: 90vw; min-width: unset; height: 45vh; }
+}

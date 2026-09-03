@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Robot Drive</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="hud">
+    <section class="panel panel-control">
+      <div class="status-ring" id="statusRing">
+        <div class="joystick-base" id="joystickBase">
+          <div class="joystick-puck" id="joystickPuck"></div>
+        </div>
+      </div>
+      <div class="speed-cap">
+        <label for="speedCap">SPEED CAP</label>
+        <input type="range" id="speedCap" min="0" max="100" value="60">
+        <span id="speedCapValue">60%</span>
+      </div>
+      <div class="warning" id="warningLabel"></div>
+    </section>
+
+    <section class="panel panel-telemetry">
+      <svg viewBox="0 0 200 200" class="telemetry-dial">
+        <circle cx="100" cy="100" r="90" class="dial-ring"/>
+        <circle cx="100" cy="100" r="70" class="dial-ring-inner"/>
+        <circle id="currentLeftArc" cx="100" cy="100" r="80" class="arc arc-left"/>
+        <circle id="currentRightArc" cx="100" cy="100" r="60" class="arc arc-right"/>
+        <text x="100" y="90" class="dial-label" text-anchor="middle">VBUS</text>
+        <text id="vbusValue" x="100" y="112" class="dial-value" text-anchor="middle">--.- V</text>
+        <text id="dutyValue" x="100" y="132" class="dial-sub" text-anchor="middle">L -- / R --</text>
+      </svg>
+      <div class="battery-gauge">
+        <div class="battery-fill" id="batteryFill"></div>
+        <span id="batteryLabel">-- V</span>
+      </div>
+    </section>
+  </div>
+
+  <script src="/mix.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
