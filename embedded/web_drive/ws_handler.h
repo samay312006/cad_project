@@ -8,6 +8,7 @@
 #include <LittleFS.h>
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 static httpd_handle_t server = NULL;
 static int wsClientFd = -1;
@@ -31,8 +32,14 @@ static bool parseDriveMessage(const char *json, int *left, int *right) {
   rp = strchr(rp, ':');
   if (!lp || !rp) return false;
 
-  long l = strtol(lp + 1, nullptr, 10);
-  long r = strtol(rp + 1, nullptr, 10);
+  char *lend = nullptr;
+  char *rend = nullptr;
+  long l = strtol(lp + 1, &lend, 10);
+  long r = strtol(rp + 1, &rend, 10);
+  // strtol sets endptr == start when no digits were consumed at all (e.g.
+  // a string value like "oops") - reject those instead of silently
+  // coercing to 0.
+  if (lend == lp + 1 || rend == rp + 1) return false;
   if (l < -255 || l > 255 || r < -255 || r > 255) return false;
 
   *left  = (int)l;
@@ -52,23 +59,15 @@ static esp_err_t wsHandler(httpd_req_t *req) {
   memset(&pkt, 0, sizeof(pkt));
   pkt.type = HTTPD_WS_TYPE_TEXT;
 
-  // First call with a NULL/zero-length buffer just reports pkt.len.
+  // First call with a NULL/zero-length buffer just reports pkt.len and
+  // pkt.type from the frame header, without consuming the payload.
   esp_err_t ret = httpd_ws_recv_frame(req, &pkt, 0);
   if (ret != ESP_OK) return ret;
-  if (pkt.len == 0) return ESP_OK;
 
-  static uint8_t buf[257];
-  size_t recvLen = pkt.len;
-  if (recvLen >= sizeof(buf)) recvLen = sizeof(buf) - 1;  // truncate defensively
-
-  pkt.payload = buf;
-  ret = httpd_ws_recv_frame(req, &pkt, recvLen);
-  if (ret != ESP_OK) return ret;
-
-  size_t n = pkt.len;
-  if (n > sizeof(buf) - 1) n = sizeof(buf) - 1;
-  buf[n] = '\0';
-
+  // A close frame may legally carry zero bytes of payload (RFC6455), so
+  // this must be checked before the len==0 early return below - otherwise
+  // a zero-payload close never reaches this branch and the client/motor
+  // state is never cleaned up.
   if (pkt.type == HTTPD_WS_TYPE_CLOSE) {
     Serial.println("WS client disconnected");
     wsClientFd = -1;
@@ -76,13 +75,65 @@ static esp_err_t wsHandler(httpd_req_t *req) {
     return ESP_OK;
   }
 
-  if (pkt.type != HTTPD_WS_TYPE_TEXT) return ESP_OK;
+  size_t frameLen = pkt.len;
+  if (frameLen == 0) return ESP_OK;
+
+  // 512 bytes comfortably covers any real drive-command message from this
+  // sketch's own frontend (matches the buffer size already used by the
+  // file-serving code below). Anything bigger goes through the malloc'd
+  // path so the socket is always fully drained instead of desyncing.
+  static uint8_t buf[512];
+  static const size_t MAX_WS_MSG = 1024;  // sane cap against a bogus length field
+
+  uint8_t *readBuf = buf;
+  uint8_t *heapBuf = nullptr;
+  size_t copyLen = frameLen;   // bytes to actually request in the second recv call
+  bool discard = false;
+
+  if (frameLen >= sizeof(buf)) {
+    if (frameLen <= MAX_WS_MSG) {
+      // Genuinely oversized but sane: allocate exactly enough to read the
+      // whole frame in one call so the transport is fully drained.
+      heapBuf = (uint8_t *)malloc(frameLen + 1);
+      if (!heapBuf) return ESP_ERR_NO_MEM;
+      readBuf = heapBuf;
+      copyLen = frameLen;
+    } else {
+      // Bogus/huge length field - best-effort drain up to the cap so the
+      // transport-level read completes, then discard without parsing.
+      Serial.printf("WS frame too large (%u bytes), draining and discarding\n",
+                     (unsigned)frameLen);
+      heapBuf = (uint8_t *)malloc(MAX_WS_MSG);
+      if (!heapBuf) return ESP_ERR_NO_MEM;
+      readBuf = heapBuf;
+      copyLen = MAX_WS_MSG;
+      discard = true;
+    }
+  }
+
+  pkt.payload = readBuf;
+  ret = httpd_ws_recv_frame(req, &pkt, copyLen);
+  if (ret != ESP_OK) {
+    if (heapBuf) free(heapBuf);
+    return ret;
+  }
+
+  if (discard || pkt.type != HTTPD_WS_TYPE_TEXT) {
+    if (heapBuf) free(heapBuf);
+    return ESP_OK;
+  }
+
+  size_t n = copyLen;
+  if (!heapBuf && n > sizeof(buf) - 1) n = sizeof(buf) - 1;
+  readBuf[n] = '\0';
 
   int left, right;
-  if (parseDriveMessage((const char *)buf, &left, &right)) {
+  if (parseDriveMessage((const char *)readBuf, &left, &right)) {
     drive(left, right);
     lastDriveMsgMs = millis();
   }
+
+  if (heapBuf) free(heapBuf);
   return ESP_OK;
 }
 
@@ -104,11 +155,18 @@ static void wsSendTelemetry() {
 
   readCurrents();
 
+  // readCurrents() sets .amps to NAN when a sensor is absent. %.3f on NaN
+  // formats as "nan"/"-nan", which is not a valid JSON token and would
+  // break JSON.parse() on the GUI side for the life of the connection -
+  // substitute a safe numeric value instead.
+  float leftAmps  = isnan(isense[LEFT].amps)  ? 0.0f : isense[LEFT].amps;
+  float rightAmps = isnan(isense[RIGHT].amps) ? 0.0f : isense[RIGHT].amps;
+
   char json[192];
   int n = snprintf(json, sizeof(json),
     "{\"type\":\"telemetry\",\"left_a\":%.3f,\"right_a\":%.3f,"
     "\"left_duty\":%d,\"right_duty\":%d,\"vbus\":%.2f}",
-    isense[LEFT].amps, isense[RIGHT].amps,
+    leftAmps, rightAmps,
     lastDuty[LEFT], lastDuty[RIGHT], readBusVoltage());
 
   httpd_ws_frame_t pkt;
