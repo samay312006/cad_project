@@ -47,6 +47,30 @@ static bool parseDriveMessage(const char *json, int *left, int *right) {
   return true;
 }
 
+// Best-effort attempt to drain a WS frame's remaining payload off the
+// socket when we couldn't allocate a buffer to actually receive it into
+// (malloc() failure under heap pressure). Reuses the small fixed-size
+// scratch buffer that's always available on the stack/static storage,
+// discarding whatever it reads.
+//
+// This is deliberately "best effort," not a guarantee: whether repeated
+// httpd_ws_recv_frame() calls on the same frame correctly walk forward
+// through the remaining bytes (vs. re-reading/misaligning) is an ESP-IDF
+// internal behavior we can't verify without hardware/toolchain access here.
+// The goal is only to reduce the odds of leaving unread bytes on the wire
+// that desync the next frame read - not to guarantee it. Bounded by a small
+// iteration cap so a bogus/huge length field can never turn this into an
+// unbounded loop; after the cap we give up and return anyway.
+static void wsDrainBestEffort(httpd_req_t *req, httpd_ws_frame_t *pkt,
+                               uint8_t *scratch, size_t scratchCap) {
+  static const int kMaxDrainIterations = 8;  // ~4KB at 512B/iter - comfortably covers the 1024B cap
+  for (int i = 0; i < kMaxDrainIterations; i++) {
+    pkt->payload = scratch;
+    esp_err_t r = httpd_ws_recv_frame(req, pkt, scratchCap);
+    if (r != ESP_OK) break;  // socket already errored/closed - nothing more to drain
+  }
+}
+
 static esp_err_t wsHandler(httpd_req_t *req) {
   if (req->method == HTTP_GET) {
     // Handshake call - no frame to read yet.
@@ -95,7 +119,14 @@ static esp_err_t wsHandler(httpd_req_t *req) {
       // Genuinely oversized but sane: allocate exactly enough to read the
       // whole frame in one call so the transport is fully drained.
       heapBuf = (uint8_t *)malloc(frameLen + 1);
-      if (!heapBuf) return ESP_ERR_NO_MEM;
+      if (!heapBuf) {
+        // Can't allocate a buffer to receive into - fall back to a
+        // best-effort drain with the small static buffer instead of
+        // leaving the frame's bytes sitting unread on the socket (see
+        // wsDrainBestEffort() below for why this is best-effort only).
+        wsDrainBestEffort(req, &pkt, buf, sizeof(buf));
+        return ESP_ERR_NO_MEM;
+      }
       readBuf = heapBuf;
       copyLen = frameLen;
     } else {
@@ -104,7 +135,11 @@ static esp_err_t wsHandler(httpd_req_t *req) {
       Serial.printf("WS frame too large (%u bytes), draining and discarding\n",
                      (unsigned)frameLen);
       heapBuf = (uint8_t *)malloc(MAX_WS_MSG);
-      if (!heapBuf) return ESP_ERR_NO_MEM;
+      if (!heapBuf) {
+        // Same fallback as above.
+        wsDrainBestEffort(req, &pkt, buf, sizeof(buf));
+        return ESP_ERR_NO_MEM;
+      }
       readBuf = heapBuf;
       copyLen = MAX_WS_MSG;
       discard = true;
