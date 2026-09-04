@@ -60,6 +60,8 @@ struct Side {
   int  en, inFwd, inRev;
 };
 
+// If a side runs backwards during bring-up, swap its entry's inFwd/inRev pin
+// values here (no invert flag like drive_test.ino has).
 static Side sides[2] = {
   { "LEFT",  ENB, IN4, IN3 },   // OUT4 = +, OUT3 = -
   { "RIGHT", ENA, IN2, IN1 },   // OUT2 = +, OUT1 = -
@@ -78,7 +80,9 @@ static void pwmSetup(int pin, int ch) {
 #endif
 }
 
-static void pwmWrite(int pin, int ch, int duty) {
+// Returns the actually-applied (clamped) duty magnitude, so callers can
+// record what the hardware really did rather than what was requested.
+static int pwmWrite(int pin, int ch, int duty) {
   int cap = dutyMaxCounts();
   if (duty > cap) duty = cap;
   if (duty < 0)   duty = 0;
@@ -89,6 +93,7 @@ static void pwmWrite(int pin, int ch, int duty) {
   (void)pin;
   ledcWrite(ch, duty);
 #endif
+  return duty;
 }
 
 static void setSide(int s, int duty) {
@@ -103,8 +108,8 @@ static void setSide(int s, int duty) {
     digitalWrite(sd.inFwd, fwd ? HIGH : LOW);
     digitalWrite(sd.inRev, fwd ? LOW  : HIGH);
   }
-  pwmWrite(sd.en, s, mag);
-  lastDuty[s] = mag;
+  int applied = pwmWrite(sd.en, s, mag);
+  lastDuty[s] = fwd ? applied : -applied;
 }
 
 static void drive(int left, int right) {

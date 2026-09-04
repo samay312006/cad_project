@@ -2,7 +2,8 @@
 
 // ws_handler.h - esp_http_server: static file serving from LittleFS, the
 // /ws WebSocket endpoint (drive commands in, telemetry out), and the
-// 400ms command watchdog. Depends on drive_core.h being included first.
+// 400ms command watchdog. Includes drive_core.h itself (safe under its
+// #pragma once guard even though web_drive.ino also includes it directly).
 
 #include <esp_http_server.h>
 #include <LittleFS.h>
@@ -10,9 +11,14 @@
 #include <stdlib.h>
 #include <math.h>
 
+#include "drive_core.h"
+
 static httpd_handle_t server = NULL;
-static int wsClientFd = -1;
-static uint32_t lastDriveMsgMs = 0;
+// Shared between the httpd task (writes both) and the Arduino loop task
+// (reads/writes both, via wsWatchdogCheck()/wsSendTelemetry()) - volatile so
+// the compiler can't cache stale copies of either across the loop body.
+static volatile int wsClientFd = -1;
+static volatile uint32_t lastDriveMsgMs = 0;
 static const uint32_t WATCHDOG_MS = 400;
 
 // ---- inbound: {"type":"drive","left":N,"right":N} ----
@@ -88,17 +94,6 @@ static esp_err_t wsHandler(httpd_req_t *req) {
   esp_err_t ret = httpd_ws_recv_frame(req, &pkt, 0);
   if (ret != ESP_OK) return ret;
 
-  // A close frame may legally carry zero bytes of payload (RFC6455), so
-  // this must be checked before the len==0 early return below - otherwise
-  // a zero-payload close never reaches this branch and the client/motor
-  // state is never cleaned up.
-  if (pkt.type == HTTPD_WS_TYPE_CLOSE) {
-    Serial.println("WS client disconnected");
-    wsClientFd = -1;
-    stopAll();
-    return ESP_OK;
-  }
-
   size_t frameLen = pkt.len;
   if (frameLen == 0) return ESP_OK;
 
@@ -164,8 +159,13 @@ static esp_err_t wsHandler(httpd_req_t *req) {
 
   int left, right;
   if (parseDriveMessage((const char *)readBuf, &left, &right)) {
-    drive(left, right);
+    // Record the timestamp BEFORE applying the command: drive() runs on
+    // this (httpd) task while wsWatchdogCheck() reads lastDriveMsgMs from
+    // the Arduino loop task. If the timestamp were written after drive(),
+    // a watchdog check landing in between would see a stale timestamp and
+    // immediately stopAll() right after this command was applied.
     lastDriveMsgMs = millis();
+    drive(left, right);
   }
 
   if (heapBuf) free(heapBuf);
@@ -173,9 +173,14 @@ static esp_err_t wsHandler(httpd_req_t *req) {
 }
 
 // Command watchdog: call every loop() iteration. No valid drive message
-// within WATCHDOG_MS -> force stop. Covers both a clean disconnect (handled
-// above too, for a faster stop) and a silent connection loss (stalled Wi-Fi,
-// crashed browser tab) where no CLOSE frame ever arrives.
+// within WATCHDOG_MS -> force stop. This is the ONLY thing that stops the
+// motors on disconnect - there is no explicit CLOSE-frame handler. The /ws
+// URI is registered without handle_ws_control_frames, so under
+// esp_http_server's default config, WebSocket control frames (PING/PONG/
+// CLOSE) are answered internally by the framework and never reach
+// wsHandler(). That's true for a clean disconnect as well as a silent
+// connection loss (stalled Wi-Fi, crashed browser tab) - both are only
+// detected by this watchdog, up to WATCHDOG_MS late.
 static void wsWatchdogCheck() {
   if (millis() - lastDriveMsgMs > WATCHDOG_MS) {
     stopAll();

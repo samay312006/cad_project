@@ -60,4 +60,8 @@ void loop() {
     telemetryNextMs = millis() + TELEMETRY_MS;
     wsSendTelemetry();
   }
+
+  // Yield instead of spinning core 1 at 100%. Cheap against the 400ms
+  // watchdog / 200ms telemetry timing budgets.
+  delay(2);
 }
