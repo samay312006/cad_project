@@ -137,6 +137,13 @@ html, body {
 .dial-sub   { fill: var(--teal-dim); font-size: 10px; }
 
 .battery-gauge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.battery-gauge-well {
   width: 24px;
   height: 120px;
   border: 2px solid var(--red);
@@ -144,7 +151,6 @@ html, body {
   display: flex;
   flex-direction: column-reverse;
   overflow: hidden;
-  position: relative;
 }
 
 .battery-fill {
@@ -154,10 +160,6 @@ html, body {
 }
 
 #batteryLabel {
-  position: absolute;
-  bottom: -20px;
-  left: 50%;
-  transform: translateX(-50%);
   font-size: 0.7rem;
   white-space: nowrap;
 }

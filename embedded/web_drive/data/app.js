@@ -43,16 +43,17 @@
   }
 
   function connect() {
-    ws = new WebSocket(WS_URL);
+    const sock = new WebSocket(WS_URL);
+    ws = sock;
 
-    ws.onopen = () => {
+    sock.onopen = () => {
       connected = true;
       setStatus("connected");
       setWarning("");
       if (dragging) startKeepalive();
     };
 
-    ws.onclose = () => {
+    sock.onclose = () => {
       connected = false;
       setStatus("disconnected");
       setWarning("LINK LOST");
@@ -60,11 +61,11 @@
       setTimeout(connect, 1000);   // keep trying to reconnect
     };
 
-    ws.onerror = () => {
-      ws.close();
+    sock.onerror = () => {
+      sock.close();
     };
 
-    ws.onmessage = (evt) => {
+    sock.onmessage = (evt) => {
       let msg;
       try { msg = JSON.parse(evt.data); } catch (e) { return; }
       if (msg.type === "telemetry") renderTelemetry(msg);
@@ -153,5 +154,9 @@
   });
 
   setStatus("disconnected");
+  // Avoid the arcs rendering as full circles (misread as "max current")
+  // before the first telemetry message arrives.
+  setArc(currentLeftArc, 80, 0);
+  setArc(currentRightArc, 60, 0);
   connect();
 })();
