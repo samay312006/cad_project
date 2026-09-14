@@ -24,8 +24,8 @@
 #include "drive_core.h"
 #include "ws_handler.h"
 
-static const char *AP_SSID     = "RobotDrive";
-static const char *AP_PASSWORD = "drive1234";   // WPA2, 8+ chars - change before field use
+static const char *AP_SSID     = "Cheese";
+static const char *AP_PASSWORD = "stellarcheese";   // WPA2, 8+ chars - change before field use
 
 static uint32_t telemetryNextMs = 0;
 static const uint32_t TELEMETRY_MS = 200;   // ~5 Hz
