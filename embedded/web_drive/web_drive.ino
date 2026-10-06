@@ -1,34 +1,42 @@
 /*
- * web_drive.ino - landscape browser drive control + telemetry, served
- * directly from the ESP32 over its own Wi-Fi AP.
+ * web_drive.ino - landscape browser drive control + telemetry, now relayed
+ * through the cloud (EC2 Mosquitto broker) instead of the ESP32's own
+ * Wi-Fi AP. See docs/superpowers/specs/2026-10-04-cloud-web-dashboard-
+ * design.md for the full design; this sketch is still the same "bring-up
+ * tool" scope as before (no SAFE_HOLD, no mode state machine, spec.md §5)
+ * - only the transport changed, from local AP+WebSocket to Wi-Fi-station+
+ * MQTT.
  *
- * BRING-UP TOOL, not the real firmware: no SAFE_HOLD, no mode state machine
- * (spec.md §5). Two things stand in for that here:
+ * Two things still stand in for the real safety stack:
  *   - a voltage-based duty clamp (drive_core.h, from drive_calib.ino) so
  *     3.0-6.0V motors never see more than ~5.5V from this 12V bus
- *   - a 400ms command watchdog (ws_handler.h): no valid "drive" message ->
- *     motors stop
+ *   - a command watchdog (mqtt_handler.h): no valid "drive" message ->
+ *     motors stop. Timeout raised from 400ms (local-AP) to 1500ms (design
+ *     D6) to tolerate ordinary internet/cloud-relay latency/jitter without
+ *     false-tripping.
  *
- * WHEELS OFF THE GROUND for first bring-up. Full design:
- * docs/superpowers/specs/2026-09-03-web-drive-gui-design.md
+ * WHEELS OFF THE GROUND for first bring-up - not yet bench-tested with this
+ * MQTT transport (see UPDATES.md).
  *
- * Requires a LittleFS image built from this sketch's data/ folder
- * (index.html/style.css/mix.js/app.js) uploaded before first use - e.g.
- * Arduino IDE "ESP32 Sketch Data Upload" tool, or the equivalent for your
- * IDE version.
+ * The dashboard frontend (index.html/style.css/mix.js/mqtt_topics.js/
+ * app.js) no longer lives here - it moved to cloud/dashboard/, served by
+ * nginx (locally, or on EC2), not LittleFS. No LittleFS image needed for
+ * this sketch anymore.
  */
 
 #include <WiFi.h>
-#include <ESPmDNS.h>
 
 #include "drive_core.h"
-#include "ws_handler.h"
+#include "mqtt_handler.h"
 
-static const char *AP_SSID     = "Cheese";
-static const char *AP_PASSWORD = "stellarcheese";   // WPA2, 8+ chars - change before field use
+// [TBD] real on-site Wi-Fi credentials - these are LOCAL-DEV placeholders
+// only (point at a Mosquitto-in-Docker host on your dev LAN, design doc §8
+// item 1). Do not field this sketch with these values.
+static const char *WIFI_SSID     = "your-dev-wifi";
+static const char *WIFI_PASSWORD = "your-dev-wifi-password";
 
 static uint32_t telemetryNextMs = 0;
-static const uint32_t TELEMETRY_MS = 200;   // ~5 Hz
+static const uint32_t TELEMETRY_MS = 200;   // ~5 Hz, unchanged from the local-AP version
 
 void setup() {
   Serial.begin(115200);
@@ -36,32 +44,34 @@ void setup() {
 
   driveSetup();   // kills both bridges first, then brings up pins + INA219s
 
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
-  Serial.print("AP started: ");
-  Serial.println(WiFi.softAPIP());
-
-  if (MDNS.begin("robotdrive")) {
-    Serial.println("mDNS started: http://robotdrive.local/");
-  } else {
-    Serial.println("mDNS failed to start");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    // Blocking by design, only at boot: nothing meaningful to drive yet
+    // (driveSetup() above already forced motors to zero), so there's no
+    // watchdog to stall here the way there would be once loop() starts.
+    delay(500);
+    Serial.print(".");
   }
+  Serial.println();
+  Serial.print("Wi-Fi connected, IP: ");
+  Serial.println(WiFi.localIP());
 
-  if (!startWebServer()) {
-    Serial.println("Web server failed to start - halting");
-    while (true) { delay(1000); }
-  }
-  Serial.println("Web server up. Open http://<AP IP>/ or http://robotdrive.local/");
+  mqttSetup();
+  Serial.println("MQTT client configured. Connecting in loop()...");
 }
 
 void loop() {
-  wsWatchdogCheck();
+  mqttLoop();   // services the MQTT client, (re)connects as needed, and
+                // runs the command watchdog on every iteration - see
+                // mqtt_handler.h's mqttLoop() for why reconnect and the
+                // watchdog can't be two independent blocking steps here.
 
   if ((int32_t)(millis() - telemetryNextMs) >= 0) {
     telemetryNextMs = millis() + TELEMETRY_MS;
-    wsSendTelemetry();
+    mqttSendTelemetry();
   }
 
-  // Yield instead of spinning core 1 at 100%. Cheap against the 400ms
-  // watchdog / 200ms telemetry timing budgets.
   delay(2);
 }
