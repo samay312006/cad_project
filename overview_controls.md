@@ -2,7 +2,7 @@
 
 ## Abstract
 
-A hobby-scale 4-wheel ground robot pairs a real-time ESP32 controller with a handheld Android phone bridge/GUI (connected wirelessly, not robot-mounted) and a cloud "brain" (AWS EC2 running SLAM Toolbox, Nav2, and a custom D*-Lite global planner) to deliver three operating modes — Manual, Autonomous, and Follow-me — plus an electromagnet actuator for small magnetic payload pickup. The system's defining control property is a closed-loop, autonomous incline-compensation controller: rather than relying on manual per-terrain tuning, the robot infers increased drive load from current/voltage sensing (a back-EMF-informed signal) and reallocates motor power in real time. This is enforced by a strict architectural split — the ESP32 owns all real-time control and safety locally; the cloud is used only for heavy math (mapping, global path planning) and is never in the safety-critical path.
+A hobby-scale 4-wheel ground robot pairs a real-time ESP32 controller, connected directly to a cloud "brain" over MQTT/TLS (AWS EC2 running SLAM Toolbox, Nav2, a custom D*-Lite global planner, the MQTT broker, and a browser-based operator dashboard — `docs/superpowers/specs/2026-10-04-cloud-web-dashboard-design.md`), to deliver three operating modes — Manual, Autonomous, and Follow-me — plus an electromagnet actuator for small magnetic payload pickup. The system's defining control property is a closed-loop, autonomous incline-compensation controller: rather than relying on manual per-terrain tuning, the robot infers increased drive load from current/voltage sensing (a back-EMF-informed signal) and reallocates motor power in real time. This is enforced by a strict architectural split — the ESP32 owns all real-time control and safety locally; the cloud is used only for heavy math (mapping, global path planning) and is never in the safety-critical path.
 
 ## Application
 
@@ -19,17 +19,16 @@ Intended as a low-cost platform for terrain-crossing payload retrieval (e.g. pic
 ## Architecture
 
 ```
-   ESP32 (real-time control + safety)  ◄──Wi-Fi, UDP JSON──►  Phone (handheld bridge/GUI)
-        │  IMU, GPS, current/voltage,                              │
-        │  motor PWM, electromagnet,                                │
-        │  range sensor + sweep servo                                │
-        └── owns: mode arbitration, SAFE_HOLD,                     └── MQTT/TLS ──► EC2
-            incline-compensation loop, stall/                          (SLAM Toolbox,
-            brownout protection, scan assembly                         Nav2, D*-Lite —
-                                                                         heavy math only)
+   ESP32 (real-time control + safety)  ──Wi-Fi station, MQTT/TLS──►  EC2
+        │  IMU, GPS, current/voltage,                                 (SLAM Toolbox,
+        │  motor PWM, electromagnet,                                   Nav2, D*-Lite,
+        │  range sensor + sweep servo                                  Mosquitto broker,
+        └── owns: mode arbitration, SAFE_HOLD,                         browser dashboard —
+            incline-compensation loop, stall/                          heavy math + GUI only)
+            brownout protection, scan assembly
 ```
 
-The ESP32 now hosts its own Wi-Fi access point — the phone is a handheld device, not robot-mounted, and connects to it directly (`spec.md` §6.1, §7). This is also why the range sensor moved from the phone (formerly USB-OTG) onto the ESP32: a single-point sensor on a continuously sweeping servo, emulating a 2D scan (§2 sensor list in `spec.md`, not a spinning 2D lidar — dropped for cost).
+The ESP32 is a Wi-Fi *station*, not an access point — it joins local Wi-Fi and talks MQTT/TLS directly to EC2 (`spec.md` §6.1, §7; `docs/superpowers/specs/2026-10-04-cloud-web-dashboard-design.md`). There is no phone in this architecture anymore; the browser dashboard served from EC2 is a client of the same broker, not a bridge the ESP32 connects to directly. The range sensor remains on the ESP32 (not on any operator device): a single-point sensor on a continuously sweeping servo, emulating a 2D scan (§2 sensor list in `spec.md`, not a spinning 2D lidar — dropped for cost).
 
 Full interface contracts, message schemas, and the sensor list (with `[TBD]` BOM gaps) are in `spec.md` §4/§6. This document focuses on what runs on the ESP32 and why it's structured the way it is.
 
@@ -75,7 +74,7 @@ This is the project's central control-systems contribution. Full derivation of w
 
 ### Where this runs
 
-Entirely on the ESP32, at the control loop's native rate (`spec.md` NFR-1, `[ASSUMPTION] 100–200 Hz`). No part of this loop reads from or waits on the phone or EC2 link — it is local reflex behavior by definition (see §3).
+Entirely on the ESP32, at the control loop's native rate (`spec.md` NFR-1, `[ASSUMPTION] 100–200 Hz`). No part of this loop reads from or waits on the EC2 link — it is local reflex behavior by definition (see §3).
 
 ---
 
@@ -86,7 +85,7 @@ Entirely on the ESP32, at the control loop's native rate (`spec.md` NFR-1, `[ASS
 | Owns | mode arbitration, SAFE_HOLD, incline compensation, stall/brownout protection, path-following *between* waypoint updates | SLAM map building, D*-Lite global path computation |
 | Timescale | milliseconds | seconds |
 | Availability requirement | must always work | best-effort — absence degrades capability, not safety |
-| Input | IMU, GPS, current/voltage, heartbeat state, range sensor + sweep servo (raw samples) | assembled range scan (relayed from ESP32 via phone), odometry, goal |
+| Input | IMU, GPS, current/voltage, heartbeat state, range sensor + sweep servo (raw samples) | assembled range scan (published directly by ESP32, `[TBD]` not implemented yet), odometry, goal |
 
 The split isn't just "cloud is for expensive computation" — it's specifically that **nothing on the fault-detection-to-SAFE_HOLD path may reference cloud-sourced data**, per `spec.md` §9. The ESP32 caches the last valid waypoint list and continues local path-following/reflex behavior against it if the cloud link drops; it only enters SAFE_HOLD from a stale plan if that staleness itself crosses a threshold (`spec.md` §8, `[ASSUMPTION] 10 s`), which is a local timer check, not a cloud dependency.
 
@@ -94,7 +93,7 @@ The split isn't just "cloud is for expensive computation" — it's specifically 
 
 ## 4. Mode State Machine
 
-Full transition table is in `spec.md` §5. The controls-relevant point: the ESP32 is the **sole authority** over the confirmed mode, not the phone GUI — because mode arbitration is itself a safety decision (e.g., refusing to enter Autonomous without a fresh valid plan), and safety decisions can't be delegated to a non-real-time, non-safety-rated bridge device. On any mode exit, in-flight commands (queued waypoints, a Follow-me target lock) are discarded, and the new mode starts from a **zero** command state rather than continuing the previous mode's last command — this avoids a surprise-motion failure mode where, e.g., switching out of Autonomous mid-turn continues that turn under manual control before the operator has given fresh input.
+Full transition table is in `spec.md` §5. The controls-relevant point: the ESP32 is the **sole authority** over the confirmed mode, not the browser dashboard — because mode arbitration is itself a safety decision (e.g., refusing to enter Autonomous without a fresh valid plan), and safety decisions can't be delegated to a non-real-time, non-safety-rated client. On any mode exit, in-flight commands (queued waypoints, a Follow-me target lock) are discarded, and the new mode starts from a **zero** command state rather than continuing the previous mode's last command — this avoids a surprise-motion failure mode where, e.g., switching out of Autonomous mid-turn continues that turn under manual control before the operator has given fresh input.
 
 The cross-cutting `SAFE_HOLD` interlock (not counted as a fourth mode, per the project's exactly-three-modes constraint) supersedes whichever mode is active on fault, and requires an explicit operator acknowledgment to exit — it never auto-resumes autonomy, on the principle that a fault that already happened once shouldn't be silently retried without a human noticing.
 
@@ -104,7 +103,7 @@ The cross-cutting `SAFE_HOLD` interlock (not counted as a fourth mode, per the p
 
 `[ASSUMPTION/VERIFY]` — the following describes the recommended real-time structure; exact APIs depend on the ESP32 variant `[TBD]` and whether the firmware is built on ESP-IDF (FreeRTOS-based) or Arduino-on-ESP-IDF.
 
-- **Task structure**: a high-priority control task (sensor sampling, incline-compensation loop, mode/SAFE_HOLD logic) should run at a fixed, guaranteed rate, separated from lower-priority tasks like phone-link JSON parsing (now over a Wi-Fi socket rather than a UART, per `spec.md` §6.1) — so a slow or malformed packet parse can't introduce jitter into the control loop. `[VERIFY]` ESP-IDF's FreeRTOS supports pinning tasks to specific cores on dual-core variants, which — if the chosen variant is dual-core — is a reasonable way to physically isolate the control task from comms handling; confirm against the specific variant chosen `[TBD]`, since some ESP32 variants are single-core.
+- **Task structure**: a high-priority control task (sensor sampling, incline-compensation loop, mode/SAFE_HOLD logic) should run at a fixed, guaranteed rate, separated from lower-priority tasks like MQTT message parsing/reconnect handling (`spec.md` §6.1) — so a slow parse, a malformed payload, or a blocking broker-reconnect attempt can't introduce jitter (or worse, a stuck loop) into the control loop. `[VERIFY]` ESP-IDF's FreeRTOS supports pinning tasks to specific cores on dual-core variants, which — if the chosen variant is dual-core — is a reasonable way to physically isolate the control task from comms handling; confirm against the specific variant chosen `[TBD]`, since some ESP32 variants are single-core.
 - **Deterministic sampling**: current/voltage (and ideally IMU) sampling should be timer/ISR-triggered rather than sampled opportunistically inside a task loop, so sample timing doesn't jitter with whatever else the CPU is doing — this matters directly for the PWM-off-phase-gated sampling technique discussed in `spec.md` §7, which depends on sampling at a specific phase of the PWM cycle.
 - **Watchdog**: a hardware or software watchdog timer should force a defined fail-safe state (motors to zero, not a silent reset that leaves motors mid-command) if the control task hangs — this is the last line of defense underneath the SAFE_HOLD logic itself, for the case where SAFE_HOLD logic can't run because something has already gone more seriously wrong (e.g. a task deadlock).
 - **Fail-safe default**: on boot, and on any unhandled fault, the default output state is zero motor command and electromagnet off — never an unspecified/last-held state, which could be arbitrary garbage after a crash/reset.
@@ -113,4 +112,4 @@ The cross-cutting `SAFE_HOLD` interlock (not counted as a fourth mode, per the p
 
 ## 6. Cloud Summary (light — see `overview_cloud.md` for depth)
 
-EC2 runs SLAM Toolbox (mapping from relayed range scan + odometry — the scan assembled on the ESP32 from a servo-swept single-point sensor, not a 2D lidar) and Nav2 with a custom D*-Lite global planner (`plan.md` 2a.4), reachable over MQTT/TLS from the phone bridge. The whole stack is validated locally (Dockerized, same broker software, same message contracts) before any AWS resource exists, per the project's hard constraint. Full AWS topology, cost, and security detail is in `overview_cloud.md`.
+EC2 runs SLAM Toolbox (mapping from range scan + odometry published directly by the ESP32, `[TBD]` not implemented yet — the scan assembled from a servo-swept single-point sensor, not a 2D lidar) and Nav2 with a custom D*-Lite global planner (`plan.md` 2a.4), plus the Mosquitto broker and the browser dashboard's static files. The whole stack is validated locally (Dockerized, same broker software, same message contracts) before any AWS resource exists, per the project's hard constraint. Full AWS topology, cost, and security detail is in `overview_cloud.md`.
