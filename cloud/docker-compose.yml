@@ -1,0 +1,26 @@
+# Local-first rehearsal stack for the cloud-hosted drive dashboard (design
+# doc: docs/superpowers/specs/2026-10-04-cloud-web-dashboard-design.md, §8
+# testing plan item 1). Mirrors the eventual EC2 topology (nginx + Mosquitto)
+# so swapping to EC2 later is a configuration change, not a new architecture
+# - same spirit as plan.md 2c.1's local/cloud parity argument.
+#
+# Usage: `docker compose -f cloud/docker-compose.yml up -d`
+# Dashboard: http://localhost:8080/  Broker: localhost:1883 (MQTT), :9001 (WS)
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+
+  dashboard:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+    volumes:
+      - ./dashboard:/usr/share/nginx/html:ro
+    depends_on:
+      - mosquitto
