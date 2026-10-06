@@ -78,8 +78,15 @@ EC2 instance (single public subnet, VPC — same instance plan.md §2b.2 already
 ESP32 (Wi-Fi station — joins whatever Wi-Fi/internet is available on-site)
 ```
 
-Security group: 443 (HTTPS+WSS) and 22 (SSH, IP-restricted) only — same minimal posture
-as `plan.md` §2b.2, just no separate MQTT port since it's proxied through 443 via nginx.
+Security group: 443 (HTTPS+WSS, dashboard), 8883 (MQTT/TLS, ESP32), and 22 (SSH,
+IP-restricted) only. **Correction 2026-10-06**: this originally said "no separate MQTT
+port since it's proxied through 443 via nginx" — that's wrong. nginx's WSS reverse proxy
+on 443 only serves *browser* clients speaking MQTT-over-WebSocket (`cloud/dashboard/`'s
+MQTT.js); the ESP32 firmware (`embedded/web_drive/mqtt_handler.h`) uses PubSubClient over
+a plain `WiFiClient`, which speaks raw MQTT over TCP, not WebSocket, and cannot go through
+an HTTP/WS reverse proxy. The ESP32 needs its own direct port to the broker — 8883 is the
+conventional MQTT/TLS port. Still a minimal posture (three ports, not an open MQTT port
+with no TLS), just one more than originally stated.
 
 ---
 
@@ -144,7 +151,7 @@ authorization to proceed.**
 3. IAM user, scoped to EC2 + this project's VPC/security-group + CloudWatch/Budgets. No
    `AdministratorAccess`.
 4. VPC, single public subnet.
-5. Security group: inbound 443 and 22 (IP-restricted) only.
+5. Security group: inbound 443 (dashboard), 8883 (ESP32 MQTT/TLS), and 22 (IP-restricted) only.
 6. EC2 instance (`t3.large`-class to start, right-size later) + Elastic IP, Ubuntu LTS AMI.
 7. On the instance: Mosquitto (TLS + WebSocket listener, self-signed cert, username/password
    auth) + nginx (serves dashboard static files, reverse-proxies the WSS path).

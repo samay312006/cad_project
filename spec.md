@@ -124,10 +124,12 @@ Boundary ownership:
 | FOLLOW_ME | MANUAL | Operator override, or target lock lost for `[ASSUMPTION] 3 s` | Same ramp-down-to-zero behavior; GUI alerted on auto-fallback |
 | AUTONOMOUS | FOLLOW_ME | **Not allowed directly** `[ASSUMPTION — design choice for safety simplicity]` | Must pass through MANUAL first |
 | FOLLOW_ME | AUTONOMOUS | **Not allowed directly** `[ASSUMPTION]` | Must pass through MANUAL first |
-| any mode | SAFE_HOLD | Heartbeat loss (ESP32↔EC2), overcurrent/stall fault, IMU fault, e-stop command | Motors bounded-stop (or immediate cutoff on overcurrent trip); queued waypoints/target-lock discarded; electromagnet state **latched**, not auto-dropped, unless brownout-protection logic requires load shedding (see plan.md Warnings) |
+| any mode | SAFE_HOLD | Overcurrent/stall fault, IMU fault, e-stop command, and (`[TBD]`, see note below) loss of ESP32↔EC2 heartbeat once that mechanism exists | Motors bounded-stop (or immediate cutoff on overcurrent trip); queued waypoints/target-lock discarded; electromagnet state **latched**, not auto-dropped, unless brownout-protection logic requires load shedding (see plan.md Warnings) |
 | SAFE_HOLD | MANUAL | Explicit operator acknowledgment/reset action only | Starts from zero command |
 
 Rejected mode-change requests return a reason code to the dashboard (e.g. `NO_VALID_PLAN`, `NO_TARGET_LOCK`, `ACTIVE_FAULT`) so it can explain the refusal rather than silently ignoring it.
+
+**Note on ESP32↔EC2 loss, SAFE_HOLD, and NFR-6 (added 2026-10-06, fixing a contradiction introduced by the §6.1/§6.2 merge)**: the row above's "loss of ESP32↔EC2 heartbeat → SAFE_HOLD" is a *different* fault condition from NFR-6/§8's "robot continues safe local operation (holds last valid plan) when EC2 is unreachable" — they are not in conflict once treated as two separate signals, but nothing currently implemented distinguishes them, which is why this needs flagging rather than silently picking one. The old (pre-merge) design had two links with two policies: ESP32↔Phone heartbeat loss → SAFE_HOLD (tight, safety-critical), Phone↔EC2 loss → degrade-but-continue (loose, non-safety-critical). Collapsing both into one ESP32↔EC2 link means a single link's loss could plausibly map to either policy, and the right answer likely depends on *what* is lost — total communication loss (no heartbeat at all) plausibly still warrants SAFE_HOLD, while *planning data specifically* going stale (NFR-6's actual concern) plausibly doesn't need to interrupt an already-good last plan. Resolving this requires defining the heartbeat mechanism §6.1's Fail-safe bullet flags as `[TBD]` first. Not resolved here — flagged in `UPDATES.md` for whoever builds SAFE_HOLD/the heartbeat mechanism on the ESP32.
 
 ---
 
@@ -195,7 +197,13 @@ the same broker the ESP32 talks to, not an intermediary in this contract.
   dead broker connection looks identical to "no command arrived." The full
   mode-machine version of this (SAFE_HOLD, §5) isn't implemented yet —
   today's watchdog only zeroes drive output, it doesn't have a mode to
-  transition.
+  transition. **This is a drive-command watchdog, not a general heartbeat**:
+  the old §6.1's mandatory `[ASSUMPTION] ≥2 Hz` heartbeat with its own
+  500ms timeout was dropped in the §6.1/§6.2 merge and not redefined here —
+  `heartbeat` is still listed as a `cmd_type` above but its rate/timeout are
+  `[TBD]`. This matters because it's only the drive watchdog, not a
+  heartbeat, that's implemented today — see the note under §5's transition
+  table for why that distinction is load-bearing once SAFE_HOLD exists.
 - **Latency budget**: NFR-4 (renamed from "Phone↔EC2" — see NFR table).
   Manual-mode drive commands now cross this budget too (they didn't in the
   old phone-bridge design, where phone→ESP32 was a separate, tighter-budget
