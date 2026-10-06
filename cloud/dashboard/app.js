@@ -14,6 +14,8 @@
   // 2c.1, not a code change.
   const MQTT_WS_URL = "ws://" + location.hostname + ":9001";
   const KEEPALIVE_MS = 150;   // well under the ESP32's 1500ms watchdog (design D6)
+  const TELEMETRY_STALE_MS = 1000;   // 5x the ESP32's ~200ms telemetry interval
+  const STALE_CHECK_MS = 300;
 
   const statusRing   = document.getElementById("statusRing");
   const joystickBase = document.getElementById("joystickBase");
@@ -34,6 +36,7 @@
   let dx = 0, dy = 0;          // current stick position, [-1,1]
   let dragging = false;
   let keepaliveTimer = null;
+  let lastTelemetryMs = null;   // null = no telemetry received yet this connection
 
   function setStatus(state) {
     // state: "connected" | "disconnected" | "stopped"
@@ -73,6 +76,7 @@
 
     c.on("reconnect", () => {
       connected = false;
+      lastTelemetryMs = null;
       setStatus("disconnected");
       setWarning("LINK LOST");
       stopKeepalive();
@@ -80,6 +84,7 @@
 
     c.on("close", () => {
       connected = false;
+      lastTelemetryMs = null;
       setStatus("disconnected");
       setWarning("LINK LOST");
       stopKeepalive();
@@ -93,8 +98,32 @@
     c.on("message", (topic, payloadBuf) => {
       if (topic !== telemetryTopic(ROBOT_ID)) return;
       const msg = parseTelemetryMessage(payloadBuf.toString());
-      if (msg) renderTelemetry(msg);
+      if (!msg) return;
+      lastTelemetryMs = Date.now();
+      // Fresh telemetry means the robot is reachable again - clear a
+      // previous "ROBOT OFFLINE" staleness warning (checkTelemetryStale()
+      // below is what sets it; the broker-connection state alone can't
+      // detect the robot dropping out while the broker itself stays up).
+      if (connected) {
+        setStatus("connected");
+        setWarning("");
+      }
+      renderTelemetry(msg);
     });
+  }
+
+  // Runs independently of the MQTT connection state: "connected to the
+  // broker" (the `connected` flag) only means the browser can reach the
+  // broker, not that the ESP32 is reachable, powered, or on Wi-Fi. Without
+  // this, a robot that drops out while the broker stays up would leave the
+  // dashboard showing a stale "connected" ring and frozen last-known
+  // telemetry forever, with the joystick silently going nowhere.
+  function checkTelemetryStale() {
+    if (!connected) return;   // the "disconnected"/LINK LOST path already covers this
+    if (isTelemetryStale(lastTelemetryMs, Date.now(), TELEMETRY_STALE_MS)) {
+      setStatus("stopped");
+      setWarning("ROBOT OFFLINE");
+    }
   }
 
   function renderTelemetry(msg) {
@@ -183,5 +212,6 @@
   // before the first telemetry message arrives.
   setArc(currentLeftArc, 80, 0);
   setArc(currentRightArc, 60, 0);
+  setInterval(checkTelemetryStale, STALE_CHECK_MS);
   connect();
 })();
