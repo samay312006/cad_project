@@ -1,1 +1,5 @@
 CLAUDE.local.md
+.superpowers/
+node_modules/
+package.json
+package-lock.json
