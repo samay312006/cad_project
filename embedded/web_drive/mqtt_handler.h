@@ -84,9 +84,11 @@ static void mqttMessageReceived(char *topic, byte *payload, unsigned int length)
   }
 }
 
-// Command watchdog: must run every loop() iteration regardless of MQTT
-// connection state - this is the ONLY thing that stops the motors on a
-// dropped link, same role as the local-AP version's wsWatchdogCheck().
+// Command watchdog: intended to run every loop() iteration regardless of
+// MQTT connection state - this is the ONLY thing that stops the motors on a
+// dropped link, same role as the local-AP version's wsWatchdogCheck(). See
+// the MQTT_SOCKET_TIMEOUT note in mqttSetup() below for the one case where
+// a blocking library call can still delay this past WATCHDOG_MS.
 static void mqttWatchdogCheck() {
   if (millis() - lastDriveMsgMs > WATCHDOG_MS) {
     stopAll();
@@ -96,6 +98,25 @@ static void mqttWatchdogCheck() {
 static void mqttSetup() {
   snprintf(driveTopicBuf, sizeof(driveTopicBuf), "robot/%s/drive", ROBOT_ID);
   snprintf(telemetryTopicBuf, sizeof(telemetryTopicBuf), "robot/%s/telemetry", ROBOT_ID);
+
+  // PubSubClient's default socket timeout is 15s: if a drive packet starts
+  // arriving and then the link dies mid-packet, mqttClient.loop() (called
+  // from mqttLoop() below) blocks inside that read for up to 15s - during
+  // which mqttWatchdogCheck() above does NOT run, so the motors could keep
+  // their last commanded duty for far longer than WATCHDOG_MS (1500ms).
+  // Capping the socket timeout at 1s bounds that stall to roughly 1s
+  // instead of 15s. This does not make the watchdog's "every iteration"
+  // guarantee absolute - a fully robust version would run the watchdog
+  // from a separate timer/task so loop() blocking can never affect it -
+  // but it closes the gap enough for this bring-up tool, and the 1500ms
+  // budget is dominated by this 1s bound now rather than the library
+  // default. Bench-check this specifically (partial-packet / mid-drop
+  // scenario) per UPDATES.md blocker #9.
+  mqttClient.setSocketTimeout(1);
+  // Also shortens how quickly a half-dead TCP connection (broker process
+  // hung but socket not yet reset) is detected and dropped, rather than
+  // waiting out the 15s default MQTT keepalive.
+  mqttClient.setKeepAlive(5);
 
   mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqttClient.setCallback(mqttMessageReceived);
