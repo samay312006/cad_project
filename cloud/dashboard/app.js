@@ -1,9 +1,19 @@
-// app.js - WebSocket client, joystick input, telemetry rendering.
-// Depends on mixDrive() from mix.js (loaded before this file in index.html).
+// app.js - MQTT-over-WebSocket client (via MQTT.js, loaded by index.html
+// before this file), joystick input, telemetry rendering. Depends on
+// mixDrive() from mix.js and the pure helpers in mqtt_topics.js (both
+// loaded before this file in index.html).
+//
+// Ported from the original web_drive WebSocket client (embedded/web_drive/
+// data/app.js) per docs/superpowers/specs/2026-10-04-cloud-web-dashboard-
+// design.md - same joystick/telemetry UI, different transport.
 
 (function () {
-  const WS_URL = "ws://" + location.host + "/ws";
-  const KEEPALIVE_MS = 150;   // well under the ESP32's 400ms watchdog
+  // Local-dev broker's WebSocket listener (cloud/mosquitto/mosquitto.conf).
+  // On EC2 this becomes a path behind nginx's WSS reverse proxy (design
+  // D3) - a configuration-only change, same swap philosophy as plan.md
+  // 2c.1, not a code change.
+  const MQTT_WS_URL = "ws://" + location.hostname + ":9001";
+  const KEEPALIVE_MS = 150;   // well under the ESP32's 1500ms watchdog (design D6)
 
   const statusRing   = document.getElementById("statusRing");
   const joystickBase = document.getElementById("joystickBase");
@@ -19,7 +29,7 @@
   const batteryFill  = document.getElementById("batteryFill");
   const batteryLabel = document.getElementById("batteryLabel");
 
-  let ws = null;
+  let client = null;
   let connected = false;
   let dx = 0, dy = 0;          // current stick position, [-1,1]
   let dragging = false;
@@ -36,40 +46,55 @@
   }
 
   function sendDrive() {
-    if (!connected || !ws || ws.readyState !== WebSocket.OPEN) return;
+    // Gated on `connected`, not just `client` existing: MQTT.js queues
+    // outgoing QoS-0 publishes made while disconnected and flushes them on
+    // reconnect by default - without this gate, drive commands sent while
+    // the joystick is held through a disconnect would all fire at once the
+    // moment the link comes back, which is exactly the "stale command
+    // executes late" risk the design doc's §5 flags. Not calling publish()
+    // at all while disconnected sidesteps that queue entirely.
+    if (!connected || !client) return;
     const cap = speedCap.value / 100;
     const { left, right } = mixDrive(dx, dy, cap);
-    ws.send(JSON.stringify({ type: "drive", left, right }));
+    client.publish(driveTopic(ROBOT_ID), buildDriveMessage(left, right));
   }
 
   function connect() {
-    const sock = new WebSocket(WS_URL);
-    ws = sock;
+    const c = mqtt.connect(MQTT_WS_URL, { reconnectPeriod: 1000 });
+    client = c;
 
-    sock.onopen = () => {
+    c.on("connect", () => {
       connected = true;
       setStatus("connected");
       setWarning("");
+      c.subscribe(telemetryTopic(ROBOT_ID));
       if (dragging) startKeepalive();
-    };
+    });
 
-    sock.onclose = () => {
+    c.on("reconnect", () => {
       connected = false;
       setStatus("disconnected");
       setWarning("LINK LOST");
       stopKeepalive();
-      setTimeout(connect, 1000);   // keep trying to reconnect
-    };
+    });
 
-    sock.onerror = () => {
-      sock.close();
-    };
+    c.on("close", () => {
+      connected = false;
+      setStatus("disconnected");
+      setWarning("LINK LOST");
+      stopKeepalive();
+    });
 
-    sock.onmessage = (evt) => {
-      let msg;
-      try { msg = JSON.parse(evt.data); } catch (e) { return; }
-      if (msg.type === "telemetry") renderTelemetry(msg);
-    };
+    c.on("error", () => {
+      // MQTT.js's own reconnectPeriod handles retry - nothing to do here
+      // beyond what "close"/"reconnect" already cover.
+    });
+
+    c.on("message", (topic, payloadBuf) => {
+      if (topic !== telemetryTopic(ROBOT_ID)) return;
+      const msg = parseTelemetryMessage(payloadBuf.toString());
+      if (msg) renderTelemetry(msg);
+    });
   }
 
   function renderTelemetry(msg) {

@@ -1,6 +1,6 @@
-// embedded/web_drive/test/mix.test.js
+// cloud/dashboard/test/mix.test.js
 const assert = require("assert");
-const { mixDrive } = require("../data/mix.js");
+const { mixDrive } = require("../mix.js");
 
 // straight forward, full stick, full speed
 {
