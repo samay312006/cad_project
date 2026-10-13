@@ -41,6 +41,15 @@
     </section>
   </div>
 
+  <!-- Broker login, shown only on the HTTPS (EC2) host - see app.js. -->
+  <form class="login" id="loginForm" hidden>
+    <div class="login-title">BROKER LOGIN</div>
+    <input id="loginUser" autocomplete="username" autocapitalize="off" value="dashboard" aria-label="Username">
+    <input id="loginPass" type="password" autocomplete="current-password" placeholder="password" aria-label="Password">
+    <button type="submit">CONNECT</button>
+    <div class="login-error" id="loginError"></div>
+  </form>
+
   <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
   <script src="/mix.js"></script>
   <script src="/mqtt_topics.js"></script>

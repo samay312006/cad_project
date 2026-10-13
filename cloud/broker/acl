@@ -1,0 +1,12 @@
+# acl - per-user topic permissions (installed as /etc/mosquitto/acl).
+# Topics: spec.md §6.1 / cloud/dashboard/mqtt_topics.js. Each user can only
+# do its own half of the conversation, so a leaked dashboard password can't
+# spoof telemetry and a leaked robot password can't drive the robot.
+
+user robot1
+topic read robot/robot1/drive
+topic write robot/robot1/telemetry
+
+user dashboard
+topic write robot/robot1/drive
+topic read robot/robot1/telemetry

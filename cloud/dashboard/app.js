@@ -8,11 +8,15 @@
 // design.md - same joystick/telemetry UI, different transport.
 
 (function () {
-  // Local-dev broker's WebSocket listener (cloud/mosquitto/mosquitto.conf).
-  // On EC2 this becomes a path behind nginx's WSS reverse proxy (design
-  // D3) - a configuration-only change, same swap philosophy as plan.md
-  // 2c.1, not a code change.
-  const MQTT_WS_URL = "ws://" + location.hostname + ":9001";
+  // Served over HTTPS = the EC2 host (cloud/broker/): nginx proxies
+  // wss://<host>/mqtt to Mosquitto's localhost-only WebSocket listener, and
+  // the broker requires a login (design D3/D5). Served over plain HTTP = the
+  // local rehearsal stack (cloud/docker-compose.yml): anonymous ws://:9001.
+  const SECURE = location.protocol === "https:";
+  const MQTT_WS_URL = SECURE
+    ? "wss://" + location.host + "/mqtt"
+    : "ws://" + location.hostname + ":9001";
+  const CREDS_KEY = "robotBrokerCreds";
   const KEEPALIVE_MS = 150;   // well under the ESP32's 1500ms watchdog (design D6)
   const TELEMETRY_STALE_MS = 1000;   // 5x the ESP32's ~200ms telemetry interval
   const STALE_CHECK_MS = 300;
@@ -30,6 +34,10 @@
   const dutyValue = document.getElementById("dutyValue");
   const batteryFill  = document.getElementById("batteryFill");
   const batteryLabel = document.getElementById("batteryLabel");
+  const loginForm  = document.getElementById("loginForm");
+  const loginUser  = document.getElementById("loginUser");
+  const loginPass  = document.getElementById("loginPass");
+  const loginError = document.getElementById("loginError");
 
   let client = null;
   let connected = false;
@@ -48,6 +56,35 @@
     warningLabel.textContent = text || "";
   }
 
+  // Login creds live in sessionStorage only (cleared when the tab closes),
+  // so a wrong/rotated password never sticks. Storage can be unavailable
+  // (private mode etc.) - then the user just logs in each page load.
+  function loadCreds() {
+    try { return JSON.parse(sessionStorage.getItem(CREDS_KEY)); } catch (e) { return null; }
+  }
+  function saveCreds(creds) {
+    try { sessionStorage.setItem(CREDS_KEY, JSON.stringify(creds)); } catch (e) { /* ignore */ }
+  }
+  function forgetCreds() {
+    try { sessionStorage.removeItem(CREDS_KEY); } catch (e) { /* ignore */ }
+  }
+
+  function showLogin(error) {
+    loginError.textContent = error || "";
+    loginForm.hidden = false;
+    loginPass.value = "";
+    loginPass.focus();
+  }
+
+  loginForm.addEventListener("submit", (e) => {
+    e.preventDefault();
+    const creds = { username: loginUser.value.trim(), password: loginPass.value };
+    if (!creds.username || !creds.password) return;
+    loginForm.hidden = true;
+    saveCreds(creds);
+    connect(creds);
+  });
+
   function sendDrive() {
     // Gated on `connected`, not just `client` existing: MQTT.js queues
     // outgoing QoS-0 publishes made while disconnected and flushes them on
@@ -62,8 +99,15 @@
     client.publish(driveTopic(ROBOT_ID), buildDriveMessage(left, right));
   }
 
-  function connect() {
-    const c = mqtt.connect(MQTT_WS_URL, { reconnectPeriod: 1000 });
+  // creds: {username, password} on the EC2 host, null for the anonymous
+  // local broker.
+  function connect(creds) {
+    const opts = { reconnectPeriod: 1000 };
+    if (creds) {
+      opts.username = creds.username;
+      opts.password = creds.password;
+    }
+    const c = mqtt.connect(MQTT_WS_URL, opts);
     client = c;
 
     c.on("connect", () => {
@@ -90,9 +134,17 @@
       stopKeepalive();
     });
 
-    c.on("error", () => {
-      // MQTT.js's own reconnectPeriod handles retry - nothing to do here
-      // beyond what "close"/"reconnect" already cover.
+    c.on("error", (err) => {
+      // CONNACK 4 = bad username/password, 5 = not authorized: retrying
+      // can't fix that, so stop MQTT.js's reconnect loop and ask again.
+      // Anything else (network) - reconnectPeriod handles retry, and
+      // "close"/"reconnect" already cover the UI.
+      if (err && (err.code === 4 || err.code === 5)) {
+        c.end(true);
+        client = null;
+        forgetCreds();
+        showLogin("Wrong username or password");
+      }
     });
 
     c.on("message", (topic, payloadBuf) => {
@@ -213,5 +265,11 @@
   setArc(currentLeftArc, 80, 0);
   setArc(currentRightArc, 60, 0);
   setInterval(checkTelemetryStale, STALE_CHECK_MS);
-  connect();
+
+  if (!SECURE) {
+    connect(null);
+  } else {
+    const saved = loadCreds();
+    if (saved) connect(saved); else showLogin("");
+  }
 })();
