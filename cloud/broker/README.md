@@ -78,6 +78,12 @@ cloud/broker/deploy.sh 3.24.67.217
 
 Re-run after editing any config or dashboard file; it keeps the same certs/passwords.
 
+## Verified (2026-10-13, after first deploy)
+
+Server cert verifies on 8883 and 443 (and a wrong IP is rejected); 9001/1883 closed from outside;
+anonymous and wrong-password logins refused; `robot1` publishing `drive` is dropped by the ACL;
+dashboard over `wss://…/mqtt` receives telemetry published by `robot1` over TLS 8883.
+
 ## ACL (who can do what)
 
 | User | Read | Write |

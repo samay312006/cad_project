@@ -35,7 +35,7 @@ cp "$DASH"/*.html "$DASH"/*.css "$DASH"/*.js "$STAGE/dashboard/"
 
 SSH=(ssh -i "$KEY" -o StrictHostKeyChecking=accept-new "ubuntu@$IP")
 "${SSH[@]}" 'rm -rf ~/robot-deploy && mkdir -m 700 ~/robot-deploy'
-scp -q -i "$KEY" -r "$STAGE"/. "ubuntu@$IP:robot-deploy/"
+scp -q -i "$KEY" -r "$STAGE"/* "ubuntu@$IP:robot-deploy/"
 "${SSH[@]}" 'sudo bash ~/robot-deploy/setup_instance.sh; rc=$?; rm -rf ~/robot-deploy; exit $rc'
 
 echo

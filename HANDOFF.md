@@ -30,10 +30,16 @@ on any network — is **blocked on getting a working AWS account**. No AWS resou
   - §5.1 dashboard: `wss://<host>/mqtt` + login form when served over HTTPS; local `http://`
     rehearsal unchanged. **Not run in a browser yet.**
   - §5.3 instance config: `cloud/broker/` (Mosquitto TLS + ACL, nginx, cert script, deploy script).
-    **Not deployed yet.**
-- **Next:** start instance → `cloud/broker/deploy.sh 3.24.67.217` → test the dashboard and a
-  TLS client against it → flash the ESP32 with an EC2 `secrets.h` → re-run §2's bench items
-  against EC2 → stop the instance.
+    **Deployed and verified 2026-10-13:** certs verify (wrong IP rejected), 9001/1883 closed
+    from outside, anonymous + wrong password refused, `robot1` can't publish drive, dashboard
+    WSS ↔ robot TLS telemetry round-trip ~405 ms from India. Dashboard JS loads clean in Chrome
+    (http mode); **the HTTPS login form has not been used by a human yet.**
+  - Creds: `~/.robot-pki/broker-creds.env` (users `robot1`, `dashboard`), CA `~/.robot-pki/ca.crt`.
+- **Next:** start instance → human opens `https://3.24.67.217/` on the phone, accepts the
+  self-signed cert, logs in as `dashboard` → flash the ESP32 with an EC2 `secrets.h` (README
+  "Using it") → re-run §2's bench items against EC2, plus the two open checks → stop instance.
+- Gotchas: newer `scp` rejects `dir/.` as a source (fixed in `deploy.sh`); `/etc/mosquitto/certs`
+  isn't readable by `ubuntu`, so on-instance `mosquitto_pub` tests need a copy of `ca.crt`.
 
 ## 1. Goal
 
