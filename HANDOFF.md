@@ -38,6 +38,18 @@ on any network — is **blocked on getting a working AWS account**. No AWS resou
 - **Next:** start instance → human opens `https://3.24.67.217/` on the phone, accepts the
   self-signed cert, logs in as `dashboard` → flash the ESP32 with an EC2 `secrets.h` (README
   "Using it") → re-run §2's bench items against EC2, plus the two open checks → stop instance.
+- **Robot on EC2, verified on hardware 2026-10-13 (later the same day):** ESP32 flashed with a TLS
+  `secrets.h` (gitignored; generated from `~/.robot-pki/`, Wi-Fi typed in by the human), joined
+  Wi-Fi and connected to the EC2 broker over TLS 8883 as `robot1` within 10.5 s (broker log shows
+  `esp32-robot1`); the IP-SAN certificate check works on the ESP32. A phone on mobile data drove the
+  robot through EC2 with live telemetry; full stick at 100 % cap applied duty 131/255 = the
+  firmware clamp 5.5/(12.6-1.9). **Not yet confirmed:** drive direction by eye, watchdog stop time
+  over EC2, Wi-Fi drop/recover, mid-packet drop.
+- **Dashboard changes (deployed):** bottom battery bar replaced by per-side current bars + numeric
+  readouts (|I|, 0-2 A, 1.8 A ceiling line); left arc fixed (it clamped negative current to zero);
+  page now scrolls on small screens (joystick still blocks scroll). Bars animate 200 ms, so a still
+  screenshot can lag the number — remove the transition if exact-match screenshots are needed.
+- Instance **stopped** at end of session.
 - Gotchas: newer `scp` rejects `dir/.` as a source (fixed in `deploy.sh`); `/etc/mosquitto/certs`
   isn't readable by `ubuntu`, so on-instance `mosquitto_pub` tests need a copy of `ca.crt`.
 
