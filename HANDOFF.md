@@ -10,6 +10,31 @@ on any network — is **blocked on getting a working AWS account**. No AWS resou
 
 ---
 
+## 0. Update 2026-10-13 (second laptop) — read this first, it supersedes §4
+
+- **AWS account works.** The `OptInRequired` in §4 was the **free plan's single-region lock**:
+  account 687633314412 only allows **`ap-southeast-2` (Sydney)**. Everything below §4 that says
+  `ap-south-1` is wrong — use Sydney.
+- **Resources now exist** (human approved each): budget `robot-monthly-10usd`, key pair
+  `robot-broker`, SG `sg-044c61d5a0f9867c5`, instance `i-0ee4e7a7d4034817c` (`t3.small`, Ubuntu
+  24.04), Elastic IP **`3.24.67.217`**. Instance is **stopped** between sessions. IDs, costs,
+  start/stop/deploy commands: **`cloud/broker/README.md`**.
+- **This laptop's setup:** AWS CLI v2 at `~/.local/bin/aws`, profile `robot2` (`aws login`,
+  assumed role, not root); `arduino-cli` at `~/bin`; PubSubClient 2.8 installed; no Docker, no
+  local Mosquitto, no Node. SSH key and CA live only on this laptop (`~/.ssh/robot-broker.pem`,
+  `~/.robot-pki/`) — another laptop needs them copied securely (README "SSH from a new network").
+- **Code done (uncommitted at time of writing — check `git log`):**
+  - §5.2 firmware TLS: `MQTT_USE_TLS` + creds in gitignored `embedded/web_drive/secrets.h`
+    (template `secrets.example.h`), CA-pinned `WiFiClientSecure`, 5 s handshake cap. Compiles
+    both ways; **not run on hardware yet.**
+  - §5.1 dashboard: `wss://<host>/mqtt` + login form when served over HTTPS; local `http://`
+    rehearsal unchanged. **Not run in a browser yet.**
+  - §5.3 instance config: `cloud/broker/` (Mosquitto TLS + ACL, nginx, cert script, deploy script).
+    **Not deployed yet.**
+- **Next:** start instance → `cloud/broker/deploy.sh 3.24.67.217` → test the dashboard and a
+  TLS client against it → flash the ESP32 with an EC2 `secrets.h` → re-run §2's bench items
+  against EC2 → stop the instance.
+
 ## 1. Goal
 
 Phone opens the dashboard at `https://<elastic-ip>`, ESP32 connects to the same EC2 Mosquitto on
