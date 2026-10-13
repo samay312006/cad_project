@@ -32,11 +32,26 @@
         <text id="vbusValue" x="100" y="112" class="dial-value" text-anchor="middle">--.- V</text>
         <text id="dutyValue" x="100" y="132" class="dial-sub" text-anchor="middle">L -- / R --</text>
       </svg>
-      <div class="battery-gauge">
-        <div class="battery-gauge-well">
-          <div class="battery-fill" id="batteryFill"></div>
+      <!-- Per-side drive current (one INA219 per side; each side's two motors
+           are paralleled, so this is the pair's total). Dashed line = the
+           1.8 A per-channel ceiling. -->
+      <div class="current-bars">
+        <div class="current-bar">
+          <div class="current-well">
+            <div class="current-fill current-fill-left" id="currentLeftFill"></div>
+            <div class="current-ceiling"></div>
+          </div>
+          <span class="current-value" id="currentLeftValue">-.-- A</span>
+          <span class="current-label">LEFT</span>
         </div>
-        <span id="batteryLabel">-- V</span>
+        <div class="current-bar">
+          <div class="current-well">
+            <div class="current-fill current-fill-right" id="currentRightFill"></div>
+            <div class="current-ceiling"></div>
+          </div>
+          <span class="current-value" id="currentRightValue">-.-- A</span>
+          <span class="current-label">RIGHT</span>
+        </div>
       </div>
     </section>
   </div>

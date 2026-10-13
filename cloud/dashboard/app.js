@@ -32,8 +32,11 @@
   const currentRightArc = document.getElementById("currentRightArc");
   const vbusValue = document.getElementById("vbusValue");
   const dutyValue = document.getElementById("dutyValue");
-  const batteryFill  = document.getElementById("batteryFill");
-  const batteryLabel = document.getElementById("batteryLabel");
+  const currentLeftFill   = document.getElementById("currentLeftFill");
+  const currentRightFill  = document.getElementById("currentRightFill");
+  const currentLeftValue  = document.getElementById("currentLeftValue");
+  const currentRightValue = document.getElementById("currentRightValue");
+  const CURRENT_FULL_SCALE_A = 2.0;   // L298N 2 A/channel rating; dashed ceiling line sits at 1.8 A
   const loginForm  = document.getElementById("loginForm");
   const loginUser  = document.getElementById("loginUser");
   const loginPass  = document.getElementById("loginPass");
@@ -179,17 +182,24 @@
   }
 
   function renderTelemetry(msg) {
-    const leftPct  = Math.max(0, Math.min(1, msg.left_a  / 2));
-    const rightPct = Math.max(0, Math.min(1, msg.right_a / 2));
+    // Magnitude, not the signed reading: the INA219 sign depends on which
+    // way each sensor sits in its motor return lead (the left one reads
+    // negative on the bench), and a negative value would clamp to an empty
+    // gauge.
+    const leftA  = Math.abs(msg.left_a);
+    const rightA = Math.abs(msg.right_a);
+    const leftPct  = Math.min(1, leftA  / CURRENT_FULL_SCALE_A);
+    const rightPct = Math.min(1, rightA / CURRENT_FULL_SCALE_A);
     setArc(currentLeftArc,  80, leftPct);
     setArc(currentRightArc, 60, rightPct);
 
     vbusValue.textContent = msg.vbus.toFixed(1) + " V";
     dutyValue.textContent = "L " + msg.left_duty + " / R " + msg.right_duty;
 
-    const battPct = Math.max(0, Math.min(1, (msg.vbus - 9.0) / (12.6 - 9.0)));
-    batteryFill.style.height = (battPct * 100).toFixed(0) + "%";
-    batteryLabel.textContent = msg.vbus.toFixed(1) + " V";
+    currentLeftFill.style.height  = (leftPct  * 100).toFixed(0) + "%";
+    currentRightFill.style.height = (rightPct * 100).toFixed(0) + "%";
+    currentLeftValue.textContent  = leftA.toFixed(2)  + " A";
+    currentRightValue.textContent = rightA.toFixed(2) + " A";
   }
 
   function setArc(circleEl, radius, pct) {

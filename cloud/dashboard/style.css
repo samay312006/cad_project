@@ -166,32 +166,56 @@ html, body {
 .dial-value { fill: var(--text); font-size: 18px; }
 .dial-sub   { fill: var(--teal-dim); font-size: 10px; }
 
-.battery-gauge {
+.current-bars {
+  display: flex;
+  justify-content: center;
+  gap: 48px;
+}
+
+.current-bar {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
 }
 
-.battery-gauge-well {
-  width: 24px;
-  height: 120px;
-  border: 2px solid var(--red);
+.current-well {
+  position: relative;
+  width: 40px;
+  height: 150px;
+  border: 2px solid var(--teal-dim);
   border-radius: 4px;
   display: flex;
   flex-direction: column-reverse;
   overflow: hidden;
 }
 
-.battery-fill {
-  background: linear-gradient(to top, var(--red), var(--orange));
+.current-fill {
   height: 0%;
-  transition: height 300ms ease;
+  transition: height 200ms ease;
+}
+.current-fill-left  { background: var(--teal); }
+.current-fill-right { background: var(--orange); }
+
+/* 1.8 A ceiling on a 0-2 A scale (same scale as the dial arcs) */
+.current-ceiling {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 90%;
+  border-top: 1px dashed var(--red);
 }
 
-#batteryLabel {
-  font-size: 0.7rem;
+.current-value {
+  font-size: 1.25rem;
+  font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.current-label {
+  font-size: 0.75rem;
+  letter-spacing: 0.15em;
+  color: var(--teal);
 }
 
 @media (max-width: 700px) {
