@@ -1,14 +1,19 @@
 #pragma once
 
 // mqtt_handler.h - MQTT client (PubSubClient over a plain WiFiClient for
-// local-dev; swap to WiFiClientSecure for the real EC2/TLS endpoint, design
-// D2/D4 - not yet wired up here, local-dev only, see UPDATES.md), the
+// the local bench broker, or WiFiClientSecure + username/password for the
+// EC2 TLS endpoint, design D2/D4 - chosen by MQTT_USE_TLS in secrets.h), the
 // robot/{id}/drive subscription and robot/{id}/telemetry publish (design
 // doc docs/superpowers/specs/2026-10-04-cloud-web-dashboard-design.md §4),
 // and the command watchdog. Includes drive_core.h itself (safe under its
 // #pragma once guard even though web_drive.ino also includes it directly).
+// Expects secrets.h (or secrets.example.h) to be included before this file:
+// MQTT_USE_TLS, MQTT_BROKER_HOST/PORT, MQTT_USERNAME/PASSWORD, MQTT_CA_CERT.
 
 #include <WiFi.h>
+#if MQTT_USE_TLS
+#include <WiFiClientSecure.h>
+#endif
 #include <PubSubClient.h>
 #include <string.h>
 #include <stdlib.h>
@@ -16,15 +21,18 @@
 
 #include "drive_core.h"
 
-// [TBD] point this at your dev machine's LAN IP running
-// cloud/docker-compose.yml's mosquitto service (design doc §8 item 1).
-// The ESP32 can't resolve "localhost" to the dev machine - it needs a real
-// reachable address on the same Wi-Fi network as WIFI_SSID in web_drive.ino.
-static const char *MQTT_BROKER_HOST = "192.0.2.1";
-static const uint16_t MQTT_BROKER_PORT = 1883;
 static const char *ROBOT_ID = "robot1";   // [ASSUMPTION] must match cloud/dashboard/mqtt_topics.js's ROBOT_ID
 
+#if MQTT_USE_TLS
+static WiFiClientSecure wifiClient;
+// WiFiClientSecure's default TLS handshake timeout is 120s. The handshake
+// runs inside mqttClient.connect() (motors already stopped by
+// mqttReconnect()), but a stalled handshake would still freeze loop() -
+// and telemetry - for that long. A healthy handshake to EC2 takes ~1-2s.
+static const unsigned long TLS_HANDSHAKE_TIMEOUT_S = 5;
+#else
 static WiFiClient wifiClient;
+#endif
 static PubSubClient mqttClient(wifiClient);
 
 static volatile uint32_t lastDriveMsgMs = 0;
@@ -118,6 +126,13 @@ static void mqttSetup() {
   // waiting out the 15s default MQTT keepalive.
   mqttClient.setKeepAlive(5);
 
+#if MQTT_USE_TLS
+  // Verify the broker against the pinned project CA - never setInsecure():
+  // an unauthenticated broker could send drive commands to the motors.
+  wifiClient.setCACert(MQTT_CA_CERT);
+  wifiClient.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_S);
+#endif
+
   mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqttClient.setCallback(mqttMessageReceived);
 }
@@ -132,9 +147,17 @@ static void mqttReconnect() {
   stopAll();
 
   String clientId = "esp32-" + String(ROBOT_ID);
-  if (mqttClient.connect(clientId.c_str())) {
+  // Empty username -> anonymous connect (local bench broker only).
+  const char *user = MQTT_USERNAME[0] ? MQTT_USERNAME : nullptr;
+  const char *pass = MQTT_USERNAME[0] ? MQTT_PASSWORD : nullptr;
+  if (mqttClient.connect(clientId.c_str(), user, pass)) {
     mqttClient.subscribe(driveTopicBuf);
     Serial.println("MQTT connected and subscribed");
+  } else {
+    // state(): -2 = TCP/TLS connect failed (wrong host/port, cert rejected),
+    // 4 = bad username/password, 5 = not authorized (see PubSubClient.h).
+    Serial.print("MQTT connect failed, state=");
+    Serial.println(mqttClient.state());
   }
 }
 

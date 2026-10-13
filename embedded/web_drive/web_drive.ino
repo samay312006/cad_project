@@ -26,14 +26,18 @@
 
 #include <WiFi.h>
 
+// Wi-Fi + broker settings and credentials live in secrets.h (gitignored);
+// copy secrets.example.h to secrets.h and fill it in. Without one, the
+// placeholders build but can't connect to anything.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#warning "web_drive: no secrets.h - building with secrets.example.h placeholders"
+#include "secrets.example.h"
+#endif
+
 #include "drive_core.h"
 #include "mqtt_handler.h"
-
-// [TBD] real on-site Wi-Fi credentials - these are LOCAL-DEV placeholders
-// only (point at a Mosquitto-in-Docker host on your dev LAN, design doc §8
-// item 1). Do not field this sketch with these values.
-static const char *WIFI_SSID     = "your-dev-wifi";
-static const char *WIFI_PASSWORD = "your-dev-wifi-password";
 
 static uint32_t telemetryNextMs = 0;
 static const uint32_t TELEMETRY_MS = 200;   // ~5 Hz, unchanged from the local-AP version
