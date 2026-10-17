@@ -8,6 +8,29 @@ dashboard (`cloud/dashboard/`) were bench-tested on a real ESP32 against a local
 and mostly pass. The next goal — a public EC2 broker so the phone dashboard and the ESP32 can be
 on any network — is **blocked on getting a working AWS account**. No AWS resource has been created.
 
+> **UPDATE 2026-10-17 — supersedes the "no AWS resource exists" / "blocked" statements below
+> (§4 and the state paragraph above are historical).** Working AWS account: 687633314412,
+> profile `robot2`, region **ap-southeast-2 (Sydney)** — not ap-south-1 as §4 planned.
+> Live: EC2 `robot-broker-2` (`i-076e0f36edc586e82`, t3.small, Ubuntu 24.04) + Elastic IP
+> `52.65.238.172`; Mosquitto TLS 8883 + nginx 443 (dashboard + `/mqtt` WSS proxy), self-signed cert
+> (CN/SAN = the IP, 10 y), users `esp32`/`dashboard` (passwords only in the human's
+> `~/.robot-broker-credentials`, not in git). Config + installer: `cloud/ec2/` (`setup.sh`).
+> SSH key `~/.ssh/robot-broker-2.pem`; port 22 is open to 0.0.0.0/0 at the human's request.
+> The dashboard does `wss://` + login on https (plain http = local anonymous rehearsal).
+> The ESP32 firmware in `embedded/web_drive/` now does TLS (pinned cert) + login; it reads
+> `secrets.h` (gitignored; template `secrets.h.example`). Flashed and running.
+> **Bench over the real link (wheels off):** TLS+login connect pass; drive over WAN pass;
+> telemetry pass; watchdog fires 1.5 s after the last *received* drive message, but end-to-end
+> stop is ~2.4-2.9 s after the operator's last message because link latency is ~1 s (see below);
+> inbound black-hole (broker->ESP dropped via iptables) -> duty 0 ~2 s after the block began, not
+> the library's 15 s stall; broker restart -> ESP reconnects in ~2 s unattended.
+> **Not done (needs the human at the bench):** Wi-Fi drop/auto-reconnect (toggle the hotspot),
+> telemetry cross-check vs `drive_test.ino` under real load, direction check by an observer.
+> **Latency finding:** TCP connect from the dev PC to Sydney is ~0.43 s and the ESP32 is on a
+> mobile carrier, so the drive path adds ~1 s. A Mumbai (ap-south-1) broker would likely cut
+> this a lot; moving it = new resources, needs the human's confirmation. `WiFi.setSleep(false)`
+> was tried and did not help (reverted).
+
 ---
 
 ## 1. Goal

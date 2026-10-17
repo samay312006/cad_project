@@ -27,28 +27,26 @@
       </div>
       <div class="speed-cap">
         <label for="speedCap">SPEED CAP</label>
-        <input type="range" id="speedCap" min="0" max="100" value="60">
-        <span id="speedCapValue">60%</span>
+        <input type="range" id="speedCap" min="0" max="100" value="100">
+        <span id="speedCapValue">100%</span>
       </div>
       <div class="warning" id="warningLabel"></div>
     </section>
 
     <section class="panel panel-telemetry">
-      <svg viewBox="0 0 200 200" class="telemetry-dial">
-        <circle cx="100" cy="100" r="90" class="dial-ring"/>
-        <circle cx="100" cy="100" r="70" class="dial-ring-inner"/>
-        <circle id="currentLeftArc" cx="100" cy="100" r="80" class="arc arc-left"/>
-        <circle id="currentRightArc" cx="100" cy="100" r="60" class="arc arc-right"/>
-        <text x="100" y="90" class="dial-label" text-anchor="middle">VBUS</text>
-        <text id="vbusValue" x="100" y="112" class="dial-value" text-anchor="middle">--.- V</text>
-        <text id="dutyValue" x="100" y="132" class="dial-sub" text-anchor="middle">L -- / R --</text>
-      </svg>
-      <div class="battery-gauge">
-        <div class="battery-gauge-well">
-          <div class="battery-fill" id="batteryFill"></div>
+      <div class="current-bars">
+        <div class="current-bar">
+          <span class="bar-value" id="currentLeftValue">0.00 A</span>
+          <div class="bar-well"><div class="bar-fill bar-left" id="currentLeftFill"></div></div>
+          <span class="bar-label">LEFT</span>
         </div>
-        <span id="batteryLabel">-- V</span>
+        <div class="current-bar">
+          <span class="bar-value" id="currentRightValue">0.00 A</span>
+          <div class="bar-well"><div class="bar-fill bar-right" id="currentRightFill"></div></div>
+          <span class="bar-label">RIGHT</span>
+        </div>
       </div>
+      <div class="bar-sub" id="dutyValue">L -- / R --</div>
     </section>
   </div>
 

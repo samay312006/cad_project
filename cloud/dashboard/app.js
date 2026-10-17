@@ -27,12 +27,11 @@
   const speedCapValue = document.getElementById("speedCapValue");
   const warningLabel  = document.getElementById("warningLabel");
 
-  const currentLeftArc  = document.getElementById("currentLeftArc");
-  const currentRightArc = document.getElementById("currentRightArc");
-  const vbusValue = document.getElementById("vbusValue");
+  const currentLeftFill  = document.getElementById("currentLeftFill");
+  const currentRightFill = document.getElementById("currentRightFill");
+  const currentLeftValue  = document.getElementById("currentLeftValue");
+  const currentRightValue = document.getElementById("currentRightValue");
   const dutyValue = document.getElementById("dutyValue");
-  const batteryFill  = document.getElementById("batteryFill");
-  const batteryLabel = document.getElementById("batteryLabel");
 
   const loginOverlay = document.getElementById("loginOverlay");
   const loginForm    = document.getElementById("loginForm");
@@ -154,24 +153,20 @@
     }
   }
 
-  function renderTelemetry(msg) {
-    const leftPct  = Math.max(0, Math.min(1, msg.left_a  / 2));
-    const rightPct = Math.max(0, Math.min(1, msg.right_a / 2));
-    setArc(currentLeftArc,  80, leftPct);
-    setArc(currentRightArc, 60, rightPct);
+  // Bar full-scale. Reverse driving reports negative current, so bars show
+  // magnitude. Beyond full-scale the bar just pins at 100%.
+  const CURRENT_FULL_SCALE_A = 2;
 
-    vbusValue.textContent = msg.vbus.toFixed(1) + " V";
-    dutyValue.textContent = "L " + msg.left_duty + " / R " + msg.right_duty;
-
-    const battPct = Math.max(0, Math.min(1, (msg.vbus - 9.0) / (12.6 - 9.0)));
-    batteryFill.style.height = (battPct * 100).toFixed(0) + "%";
-    batteryLabel.textContent = msg.vbus.toFixed(1) + " V";
+  function setBar(fillEl, valueEl, amps) {
+    const mag = Math.abs(amps);
+    fillEl.style.height = (Math.min(1, mag / CURRENT_FULL_SCALE_A) * 100).toFixed(0) + "%";
+    valueEl.textContent = mag.toFixed(2) + " A";
   }
 
-  function setArc(circleEl, radius, pct) {
-    const circumference = 2 * Math.PI * radius;
-    circleEl.style.strokeDasharray = circumference.toFixed(1);
-    circleEl.style.strokeDashoffset = (circumference * (1 - pct)).toFixed(1);
+  function renderTelemetry(msg) {
+    setBar(currentLeftFill,  currentLeftValue,  msg.left_a);
+    setBar(currentRightFill, currentRightValue, msg.right_a);
+    dutyValue.textContent = "L " + msg.left_duty + " / R " + msg.right_duty;
   }
 
   // ---- joystick input ----
@@ -236,10 +231,6 @@
   });
 
   setStatus("disconnected");
-  // Avoid the arcs rendering as full circles (misread as "max current")
-  // before the first telemetry message arrives.
-  setArc(currentLeftArc, 80, 0);
-  setArc(currentRightArc, 60, 0);
   setInterval(checkTelemetryStale, STALE_CHECK_MS);
 
   if (SECURE) {

@@ -64,4 +64,26 @@ const { mixDrive } = require("../mix.js");
   assert.strictEqual(right, 0);
 }
 
+// small stick deflection is lifted to the minimum spinning duty, not left
+// below the motors' stall threshold
+{
+  const { MIN_DUTY } = require("../mix.js");
+  const { left, right } = mixDrive(0, 0.05, 1);
+  assert.ok(left >= MIN_DUTY && left < 90, "tiny push starts near MIN_DUTY, got " + left);
+  assert.strictEqual(left, right);
+}
+
+// duty rises monotonically with stick, reverse mirrors forward
+{
+  const a = mixDrive(0, 0.3, 1).left, b = mixDrive(0, 0.6, 1).left, c = mixDrive(0, 1, 1).left;
+  assert.ok(a < b && b < c && c === 255);
+  assert.strictEqual(mixDrive(0, -0.6, 1).left, -b);
+}
+
+// a low speed cap below MIN_DUTY is respected (never exceeds the cap)
+{
+  const { left } = mixDrive(0, 1, 0.1);
+  assert.strictEqual(left, 26);
+}
+
 console.log("mix.test.js: all assertions passed");

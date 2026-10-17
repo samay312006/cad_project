@@ -45,11 +45,6 @@ void setup() {
   driveSetup();   // kills both bridges first, then brings up pins + INA219s
 
   WiFi.mode(WIFI_STA);
-  // Modem-sleep (the default) holds incoming frames until the next DTIM
-  // beacon, which measured ~1s extra one-way latency on the drive path over
-  // the real link (UPDATES #9 bench). The robot is mains/battery-powered
-  // and the watchdog budget is tight, so trade the power saving for latency.
-  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED) {
