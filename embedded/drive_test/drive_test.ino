@@ -79,7 +79,8 @@
 //   Relay module           goes to
 //   VCC   --->  5 V        (ESP32 VIN/5V pin, or the 5 V rail - coil is 5 V)
 //   GND   --->  GND        common ground with ESP32 / L298N
-//   IN    --->  GPIO23     (free pin, not a boot-strapping pin)
+//   IN    --->  GPIO19     (free, not a boot-strapping pin; matches the
+//                           team pin plan, docs/review/pin_actuators.png)
 //
 //   Relay contacts         goes to
 //   COM   --->  supply +   (rated supply for the magnet, e.g. 12 V battery +)
@@ -94,7 +95,7 @@
 // modules, the usual 3-pin blue board). If yours clicks on when IN is pulled
 // to GND instead, set false. The pin is driven to the OFF level before it is
 // made an output, so the magnet never pulses on at boot.
-#define MAGNET_RELAY 23
+#define MAGNET_RELAY 19
 const bool RELAY_ACTIVE_HIGH = true;
 bool magnetOn = false;
 
