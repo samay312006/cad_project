@@ -29,6 +29,7 @@
  *   1 / 2     probe LEFT / RIGHT with static levels (for a multimeter)
  *   c         read drive current from the INA219s
  *   i         I2C bus scan (use this to confirm sensor addresses)
+ *   g / r     electromagnet GRAB (relay on) / RELEASE (relay off)
  *   ?         reprint this help
  */
 
@@ -69,6 +70,38 @@
 #define ENB 32
 #define IN3 33
 #define IN4 14
+
+// ------------------------------------------------- electromagnet (payload)
+// Plain on/off through a 1-channel 5 V relay module - no PWM. The relay's
+// NORMALLY-OPEN contact switches the magnet's supply, so the magnet is
+// unpowered unless the ESP32 actively energises the relay.
+//
+//   Relay module           goes to
+//   VCC   --->  5 V        (ESP32 VIN/5V pin, or the 5 V rail - coil is 5 V)
+//   GND   --->  GND        common ground with ESP32 / L298N
+//   IN    --->  GPIO23     (free pin, not a boot-strapping pin)
+//
+//   Relay contacts         goes to
+//   COM   --->  supply +   (rated supply for the magnet, e.g. 12 V battery +)
+//   NO    --->  magnet wire 1
+//   NC    --->  (leave empty)
+//   magnet wire 2  --->  supply -  (GND)
+//   + flyback diode (1N4007/1N5819) across the magnet: stripe/cathode on the
+//     NO side, anode on the supply - side. The coil is inductive; without the
+//     diode the turn-off spike arcs the relay contacts.
+//
+// RELAY_ACTIVE_HIGH: true if IN = HIGH clicks the relay on (transistor-input
+// modules, the usual 3-pin blue board). If yours clicks on when IN is pulled
+// to GND instead, set false. The pin is driven to the OFF level before it is
+// made an output, so the magnet never pulses on at boot.
+#define MAGNET_RELAY 23
+const bool RELAY_ACTIVE_HIGH = true;
+bool magnetOn = false;
+
+void magnetSet(bool on) {
+  magnetOn = on;
+  digitalWrite(MAGNET_RELAY, (on == RELAY_ACTIVE_HIGH) ? HIGH : LOW);
+}
 
 // ---------------------------------------------------------------- tuning
 const int PWM_FREQ_HZ = 1000;   // L298N is slow; 1 kHz is a safe default
@@ -391,13 +424,21 @@ void help() {
   Serial.println(F("  1/2  probe LEFT / RIGHT: static levels for a multimeter"));
   Serial.println(F("  c    read drive current    i  I2C bus scan"));
   Serial.println(F("  m    current stream on/off (ON at boot, keeps driving)"));
+  Serial.println(F("  g/r  electromagnet GRAB / RELEASE  (stop keeps it as-is)"));
+  Serial.printf ("  magnet = %s (relay on GPIO%d)\n", magnetOn ? "ON" : "off", MAGNET_RELAY);
   Serial.printf ("  speed = %d / %d\n", speed, SPEED_MAX);
   Serial.println(F("  NOTE: 2 motors per channel - do not stall the wheels.\n"));
 }
 
 // ---------------------------------------------------------------- lifecycle
 void setup() {
-  // Kill both H-bridges FIRST, before anything else can run.
+  // Electromagnet relay OFF before anything else: latch the OFF level, then
+  // switch the pin to output, so it never glitches on during boot.
+  digitalWrite(MAGNET_RELAY, RELAY_ACTIVE_HIGH ? LOW : HIGH);
+  pinMode(MAGNET_RELAY, OUTPUT);
+  magnetSet(false);
+
+  // Kill both H-bridges next, before anything else can run.
   int enPins[2] = { ENA, ENB };
   for (int i = 0; i < 2; i++) {
     pinMode(enPins[i], OUTPUT);
@@ -467,6 +508,11 @@ void loop() {
       monitorNext = millis();
       Serial.printf("current stream %s\n", monitorOn ? "ON" : "off");
       break;
+
+    // Electromagnet. Deliberately NOT touched by stop/self-test/probe: a stop
+    // must never drop a carried box (spec.md §5: magnet state is latched).
+    case 'g': magnetSet(true);  Serial.println(F("magnet ON  (grab)"));    break;
+    case 'r': magnetSet(false); Serial.println(F("magnet off (release)")); break;
 
     case 't': stopAll(); selfTest(); break;
     case '?': help();               break;
