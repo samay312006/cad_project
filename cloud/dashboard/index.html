@@ -7,6 +7,17 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div class="login-overlay" id="loginOverlay" hidden>
+    <form class="login-box" id="loginForm" autocomplete="on">
+      <h1>Robot Dashboard</h1>
+      <label for="loginUser">Username</label>
+      <input id="loginUser" name="username" autocomplete="username" autocapitalize="none" spellcheck="false" value="dashboard">
+      <label for="loginPass">Password</label>
+      <input id="loginPass" name="password" type="password" autocomplete="current-password">
+      <div class="login-error" id="loginError" role="alert"></div>
+      <button type="submit">Connect</button>
+    </form>
+  </div>
   <div class="hud">
     <section class="panel panel-control">
       <div class="status-ring" id="statusRing">

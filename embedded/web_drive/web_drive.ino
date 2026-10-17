@@ -26,14 +26,14 @@
 
 #include <WiFi.h>
 
+#include "secrets.h"
 #include "drive_core.h"
 #include "mqtt_handler.h"
 
-// [TBD] real on-site Wi-Fi credentials - these are LOCAL-DEV placeholders
-// only (point at a Mosquitto-in-Docker host on your dev LAN, design doc §8
-// item 1). Do not field this sketch with these values.
-static const char *WIFI_SSID     = "your-dev-wifi";
-static const char *WIFI_PASSWORD = "your-dev-wifi-password";
+// Wi-Fi credentials come from the uncommitted secrets.h (see
+// secrets.h.example). 2.4 GHz network with internet access required.
+static const char *WIFI_SSID     = WIFI_SSID_S;
+static const char *WIFI_PASSWORD = WIFI_PASS_S;
 
 static uint32_t telemetryNextMs = 0;
 static const uint32_t TELEMETRY_MS = 200;   // ~5 Hz, unchanged from the local-AP version
@@ -45,6 +45,11 @@ void setup() {
   driveSetup();   // kills both bridges first, then brings up pins + INA219s
 
   WiFi.mode(WIFI_STA);
+  // Modem-sleep (the default) holds incoming frames until the next DTIM
+  // beacon, which measured ~1s extra one-way latency on the drive path over
+  // the real link (UPDATES #9 bench). The robot is mains/battery-powered
+  // and the watchdog budget is tight, so trade the power saving for latency.
+  WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to Wi-Fi");
   while (WiFi.status() != WL_CONNECTED) {

@@ -1,0 +1,6 @@
+# Both clients get the robot/# namespace for now (coarse; tighten per-topic later).
+user esp32
+topic readwrite robot/#
+
+user dashboard
+topic readwrite robot/#

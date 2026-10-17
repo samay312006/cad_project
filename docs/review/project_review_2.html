@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Project Review - II</title>
+<style>
+body{font-family:Calibri,Arial,sans-serif;font-size:11pt}
+h1{text-align:center;font-size:20pt} h2{font-size:14pt;margin-top:18pt}
+table{border-collapse:collapse;width:100%} td,th{border:1px solid #000;padding:4px;vertical-align:top;font-size:10pt} th{background:#e8e8e8}
+pre{font-family:Consolas,monospace;font-size:8.5pt;border:1px solid #999;padding:6px}
+.note{font-style:italic;color:#444}
+</style></head><body>
+<table align="center" width="560" style="border:none"><tr><td align="center" bgcolor="#1a2b5c" style="border:none;text-align:center;padding:14px"><img src="vit_logo.png" width="480" height="163" alt="VIT Vellore" style="display:block;margin:0 auto"></td></tr></table>
+<p style="text-align:center;font-size:18pt;margin-top:40pt"><b>Vellore Institute of Technology, Vellore</b></p>
+<h1 style="font-size:28pt;margin-top:50pt">PROJECT REVIEW - II</h1>
+<p style="text-align:center;font-size:16pt"><b>Ground Robot with Cloud-Based Control<br>(ESP32 + MQTT + Browser Dashboard)</b></p>
+<p style="text-align:center;font-size:13pt;margin-top:70pt"><b>Submitted by</b></p>
+<table style="width:100%"><tr><th>Name</th><th>Register No.</th></tr>
+<tr><td>1) Samay Ajay Sharma</td><td>24BIT0308</td></tr>
+<tr><td>2) Keshar Mishra</td><td>24BIT0417</td></tr></table>
+
+
+<h2 style="page-break-before:always">1. Problem Statement</h2>
+<p>Small ground robots usually fail in one of two ways. Either they are driven over a short-range local link, so the operator must stay close, or they push all intelligence into the cloud, so a network drop makes them unsafe. This project builds a 4-wheel ground robot whose real-time control and safety run on an ESP32, while mapping, path planning and the operator dashboard run in the cloud (AWS EC2). The two sides talk over MQTT, and a network loss never leaves the robot driving unsupervised.</p>
+<p><b>Functionalities (5 required, 6 listed):</b></p>
+<ol>
+<li><b>Remote manual driving</b> - drive the robot from a browser dashboard (virtual joystick, speed cap) from any network.</li>
+<li><b>Live telemetry</b> - motor currents, duty cycles and battery/bus voltage streamed to the dashboard at about 5 Hz, with an "offline" indication when telemetry goes stale.</li>
+<li><b>Comms-loss fail-safe</b> - if no valid drive command arrives within 1500 ms, the ESP32 stops the motors by itself, without any help from the cloud.</li>
+<li><b>Incline compensation</b> - the ESP32 detects a rise in motor current at constant duty (a grade) and raises drive power in closed loop to hold speed.</li>
+<li><b>Mapping and autonomous navigation</b> - range scans and odometry are sent to EC2, where SLAM Toolbox builds the map and Nav2 with a D*-Lite planner returns waypoints.</li>
+<li><b>Payload pickup</b> - an electromagnet picks up and releases small magnetic objects on command.</li>
+</ol>
+<p class="note">Status: functionalities 1-3 are implemented and tested on the bench and through a live AWS EC2 broker (13-10-2026). Functionality 4 (incline compensation) is designed and specified in the invention disclosure (Form B) with its controller and safety clamps; 5 and 6 are designed (spec.md, plan.md) and not yet built.</p>
+
+<h2>2. Components Required</h2>
+<p><b>Sensors - 5 &nbsp;&nbsp;&nbsp; Actuators - 3</b></p>
+<table>
+<tr><th>Sl. No</th><th>Sensor ID / Actuator ID</th><th>Sensor Name / Actuator Name</th><th>Sensor Usage</th></tr>
+<tr><td>1</td><td>S1</td><td>INA219 current sensor (2x, I2C 0x40 left, 0x41 right)</td><td>Per-side motor current: stall detection and the load signal for incline compensation</td></tr>
+<tr><td>2</td><td>S2</td><td>Bus voltage sensor (ESP32 ADC, resistor divider on GPIO34)</td><td>Battery/bus voltage for telemetry and brown-out detection</td></tr>
+<tr><td>3</td><td>S3</td><td>IMU (MPU-6050 class, I2C) <i>[model TBD]</i></td><td>Pitch/roll for incline detection; gyro for dead-reckoning odometry</td></tr>
+<tr><td>4</td><td>S4</td><td>GPS module (UART) <i>[model TBD]</i></td><td>Coarse outdoor position and goal context</td></tr>
+<tr><td>5</td><td>S5</td><td>Single-point range sensor (ToF or ultrasonic) <i>[model TBD]</i></td><td>Distance readings; with A2 it forms a scan for SLAM, obstacle detection and Follow-me</td></tr>
+<tr><td>6</td><td>A1</td><td>4 DC gearmotors via dual H-bridge driver (L298N-style: ENA/IN1/IN2, ENB/IN3/IN4)</td><td>Skid-steer locomotion; left pair and right pair each on one channel</td></tr>
+<tr><td>7</td><td>A2</td><td>Sweep servo <i>[model TBD]</i></td><td>Pans S5 back and forth to emulate a 2D scan</td></tr>
+<tr><td>8</td><td>A3</td><td>Electromagnet with MOSFET driver and flyback diode</td><td>Pick up / release small magnetic payloads</td></tr>
+</table>
+<p class="note">Controller: ESP32 (ESP32-D0WD-V3 on the bench). Items marked [TBD] are not yet chosen (UPDATES.md blocker 3).</p>
+
+<h2>3. Sensors and Actuators Pin Diagram</h2>
+<p>The diagrams below show every connection to the ESP32 DevKit. Solid lines are wired and used by the firmware (<code>embedded/web_drive/drive_core.h</code>); dashed lines are the proposed connections for parts still to be added. Both INA219 current sensors, the IMU and the range sensor share the single I2C bus on GPIO21 (SDA) and GPIO22 (SCL), told apart by their addresses.</p>
+<p style="text-align:center"><img src="pin_sensors_i2c.png" width="620" height="296"></p>
+<p style="text-align:center"><img src="pin_vbus_divider.png" width="560" height="256"></p>
+<p style="text-align:center"><img src="pin_gps.png" width="560" height="182"></p>
+<p style="text-align:center"><img src="pin_actuators.png" width="620" height="357"></p>
+<p>PWM runs at 1 kHz with 8-bit resolution (duty -255 to 255 per side). The driver's direction pins (IN1-IN4) set the polarity and the enable pins (ENA, ENB) carry the PWM.</p>
+
+<h2>4. Circuit Diagram</h2>
+<p style="text-align:center"><img src="fig_wiring.png" width="480" height="422"></p><p style="text-align:center"><b>Figure 1 - Wiring of the L298N driver, INA219 current sensors, motors and controller as used on the bench</b></p>
+<p>Each INA219 sits in the return lead of one motor channel (OUT1 to VIN+, VIN- to motor -), so it reads that side's total current; the left pair and right pair of motors are paralleled on one bridge channel each. The bus voltage is read through a 100 k / 22 k divider (ratio 5.545, trimmed against a multimeter) with a 100 nF filter capacitor, keeping the ADC below 3.3 V at full charge. PWM runs at 1 kHz, 8-bit.</p>
+<p style="text-align:center"><img src="fig_bench_photo.png" width="300" height="333"></p><p style="text-align:center"><b>Figure 2 - Bench prototype: two-deck 4-wheel chassis with the ESP32 on a breadboard, two INA219 boards and the L298N driver</b></p>
+<h2>5. Architecture Diagram</h2>
+<p>The EC2 side of this diagram is deployed and tested (t3.small, ap-southeast-2): Mosquitto with TLS 8883 and WSS 443 behind nginx, username/password authentication and a per-role ACL. SLAM Toolbox, Nav2 and D*-Lite are the next stage.</p>
+<pre>
+ +-----------------------------+                        +----------------------------------+
+ |   ESP32 (on robot)           |                        |        AWS EC2 (planned)          |
+ |  - motor PWM + watchdog      |   MQTT over TLS        |  - Mosquitto broker (TLS + auth)  |
+ |  - current/voltage sensing   | (ESP32 = Wi-Fi station,|  - nginx serves dashboard         |
+ |  - mode state machine,       |  outbound connection)  |  - SLAM Toolbox, Nav2, D*-Lite    |
+ |    SAFE_HOLD (planned)       | &lt;-------------------&gt;   |  - map store                      |
+ |  - incline compensation      |                        +----------------+-----------------+
+ |  - sweep servo + range sensor|                                         | HTTPS / WSS
+ +-----------------------------+                                          v
+                                                       +-----------------------------------+
+   Topics: robot/robot1/drive      (dashboard -> ESP32) |  Browser dashboard (phone/laptop) |
+           robot/robot1/telemetry  (ESP32 -> dashboard) |  joystick, speed cap, telemetry   |
+           planned: scan, odom, map, waypoints, mode   +-----------------------------------+
+</pre>
+<p><b>Key design rule:</b> the ESP32 owns real-time control and safety. The cloud supplies only heavy computation (maps, plans) and the operator interface, and is never in the fault-to-stop path. The fail-safe (stop within 1500 ms of command silence) is computed on the ESP32 alone.</p>
+
+<h2>6. Front End and Back End Specification</h2>
+<table>
+<tr><th>Layer</th><th>Component</th><th>Specification</th></tr>
+<tr><td rowspan="3">Front end</td><td>Browser dashboard (<code>cloud/dashboard/</code>)</td><td>HTML, CSS and vanilla JavaScript; runs on any phone, tablet or laptop browser. MQTT over WebSocket using mqtt.js 5.10.1.</td></tr>
+<tr><td>Controls</td><td>Virtual joystick mixed into differential drive (<code>mix.js</code>): left = (dy+dx)*255*cap, right = (dy-dx)*255*cap, clamped to [-255, 255]. Speed-cap slider (default 60%).</td></tr>
+<tr><td>Display</td><td>Telemetry dial (left/right current arcs, bus voltage, duty), battery gauge, connection ring. Marks the robot offline when telemetry is stale, separately from the broker connection state.</td></tr>
+<tr><td rowspan="3">Back end</td><td>Firmware (<code>embedded/web_drive/</code>)</td><td>Arduino C++ on ESP32: Wi-Fi station, PubSubClient MQTT, 1500 ms command watchdog, 200 ms telemetry period, INA219 and ADC drivers. Malformed or out-of-range commands are dropped without resetting the watchdog.</td></tr>
+<tr><td>Message broker</td><td>Eclipse Mosquitto 2 in Docker for local testing (1883 TCP, 9001 WebSocket). The EC2 deployment adds TLS on 8883, WSS behind nginx on 443, and username/password auth with a per-role ACL (the robot account cannot publish drive commands).</td></tr>
+<tr><td>Cloud compute (planned)</td><td>AWS EC2 t3.small (ap-southeast-2), deployed and tested 13-10-2026: Mosquitto (TLS 8883, WSS 443 behind nginx, password auth, per-role ACL; ports 1883 and 9001 not reachable from the Internet), nginx serving the dashboard over HTTPS with a project CA certificate. SLAM Toolbox, Nav2 and a D*-Lite global planner are the next stage.</td></tr>
+</table>
+<p><b>Message formats</b></p>
+<pre>
+robot/robot1/drive      {"left": 60, "right": 60}
+robot/robot1/telemetry  {"left_a":0.42,"right_a":0.39,"left_duty":60,"right_duty":60,"vbus":12.6}
+</pre>
+
+<h2>7. Code</h2>
+<table>
+<tr><th>File</th><th>Role</th><th>Lines</th></tr>
+<tr><td>embedded/web_drive/web_drive.ino</td><td>Setup, Wi-Fi join, main loop, 5 Hz telemetry timer</td><td>77</td></tr>
+<tr><td>embedded/web_drive/mqtt_handler.h</td><td>MQTT client, drive subscription, telemetry publish, watchdog, reconnect</td><td>180</td></tr>
+<tr><td>embedded/web_drive/drive_core.h</td><td>H-bridge PWM, INA219 and bus-voltage reads</td><td>181</td></tr>
+<tr><td>cloud/dashboard/app.js, mix.js, mqtt_topics.js</td><td>Dashboard logic, joystick mixing, topic and message helpers</td><td>217 / 13 / 65</td></tr>
+<tr><td>cloud/dashboard/index.html, style.css</td><td>Dashboard layout and styling</td><td>49 / -</td></tr>
+<tr><td>cloud/docker-compose.yml, cloud/mosquitto/mosquitto.conf</td><td>Local broker and dashboard test stack</td><td>-</td></tr>
+</table>
+<p><b>Key listing 1 - command watchdog (<code>mqtt_handler.h</code>)</b></p>
+<pre>static const uint32_t WATCHDOG_MS = 1500;
+static void mqttWatchdogCheck() {
+  if (millis() - lastDriveMsgMs &gt; WATCHDOG_MS) {
+    stopAll();      // no valid drive command for 1.5 s: stop both motors
+  }
+}</pre>
+<p><b>Key listing 2 - joystick to differential drive (<code>mix.js</code>)</b></p>
+<pre>function mixDrive(dx, dy, speedCap) {
+  const cap = Math.max(0, Math.min(1, speedCap));
+  const clamp = v =&gt; Math.max(-255, Math.min(255, v));
+  const left  = clamp(Math.round((dy + dx) * 255 * cap));
+  const right = clamp(Math.round((dy - dx) * 255 * cap));
+  return { left, right };
+}</pre>
+<p>The full source is in the project repository.</p>
+
+<h2>8. Test Case Screenshot (Sample Input / Output)</h2>
+<table>
+<tr><th>#</th><th>Test</th><th>Sample input</th><th>Expected / observed output</th></tr>
+<tr><td>1</td><td>Joystick mixing (unit test, <code>mix.test.js</code>)</td><td>dx=0, dy=1, cap=0.6<br>dx=1, dy=0, cap=0.6</td><td>{left:153, right:153}<br>{left:153, right:-153} (spin in place). <b>Pass</b></td></tr>
+<tr><td>2</td><td>Wi-Fi and MQTT connect (bench, real ESP32)</td><td>Power on with broker running</td><td>Serial prints "MQTT connected". <b>Pass</b></td></tr>
+<tr><td>3</td><td>Drive command (bench)</td><td>Publish {"left":60,"right":60}</td><td>Telemetry shows left_duty=60, right_duty=60; motors spin (duty 30 only stalls, about 0.3-0.4 A). <b>Pass</b></td></tr>
+<tr><td>4</td><td>Watchdog on command silence</td><td>Stop publishing drive commands</td><td>Motors stop 1501-1502 ms after the last command (7 of 7 trials). <b>Pass</b></td></tr>
+<tr><td>5</td><td>Broker killed while spinning</td><td>Stop Mosquitto mid-drive</td><td>Motors stop at about 1.5 s with no extra stall. <b>Pass</b></td></tr>
+<tr><td>6</td><td>Broker restart</td><td>Restart Mosquitto</td><td>ESP32 reconnects in about 4.2 s without a manual reset. <b>Pass</b></td></tr>
+<tr><td>7</td><td>Telemetry stream</td><td>Subscribe to robot/robot1/telemetry</td><td>One message every 200 ms (about 5 Hz) with plausible values. <b>Pass</b></td></tr>
+<tr><td>8</td><td>Per-side current at constant duty</td><td>Duty 180/255 on both sides, 8 samples</td><td>Left 0.12-0.76 A (mean 0.42 A), right 0.26-0.78 A (mean 0.50 A) at an unchanged command: a 40-50% spread, so current is filtered and never used as the regulated variable (Figures 4 and 5).</td></tr>
+<tr><td>9</td><td>EC2 security (13-10-2026)</td><td>Wrong-IP certificate, anonymous and wrong-password clients, robot account publishing a drive command, probe of ports 1883 / 9001</td><td>Certificate verified against the project CA and a different IP rejected; anonymous and wrong-password clients refused; robot-published drive command dropped by the ACL; 1883 and 9001 unreachable from the Internet. <b>Pass</b></td></tr>
+<tr><td>10</td><td>End-to-end delivery</td><td>Robot client publishes telemetry over TLS 8883, dashboard client on WSS 443 (client in India, server in Sydney)</td><td>Delivered in about 405 ms, well inside the 1.5 s watchdog. <b>Pass</b></td></tr>
+<tr><td>11</td><td>Firmware over TLS</td><td>TLS build flashed to the ESP32</td><td>Joined Wi-Fi and connected to the EC2 broker over TLS 8883 within 10.5 s of boot, verifying the pinned CA by IP address. <b>Pass</b></td></tr>
+<tr><td>12</td><td>Live drive through the cloud</td><td>Phone dashboard on a mobile network, full joystick at 100% speed cap</td><td>Idle: 12.6 V, 0.01 / 0.00 A. Driving: applied duty 131/255 on both sides, left 0.29 A, right 0.74 A (Figure 3). <b>Pass</b></td></tr>
+<tr><td>13</td><td>Supply-derived duty clamp</td><td>Command 255/255 with Vbus 12.6 V</td><td>Limited to 131/255 = 5.5 / (12.6 - 1.9) x 255, the exact clamp value that protects the 3-6 V motors. <b>Pass</b></td></tr>
+</table>
+
+<h3>Screenshots</h3>
+<p style="text-align:center"><img src="fig_phone_live.png" width="340" height="384"></p><p style="text-align:center"><b>Figure 3 - Live dashboard on a phone with the robot connected through the EC2 broker: (a) idle, 12.6 V, 0.01 / 0.00 A; (b) full stick at 100% cap, applied duty clamped to 131/255, left 0.29 A, right 0.74 A</b></p>
+<p style="text-align:center"><img src="fig_serial_monitor.png" width="600" height="190"></p><p style="text-align:center"><b>Figure 4 - Arduino Serial Monitor during a run at constant duty 180/255: per-side raw current, duty and duty-normalised current</b></p>
+<p style="text-align:center"><img src="fig_current_plot.png" width="600" height="234"></p><p style="text-align:center"><b>Figure 5 - Measured per-side current at constant commanded duty (data from Figure 4)</b></p>
+<p style="text-align:center"><img src="fig_watchdog_plot.png" width="600" height="215"></p><p style="text-align:center"><b>Figure 6 - Drive-command watchdog: measured stop 1501-1502 ms after the last command (7 of 7 trials)</b></p>
+<p style="text-align:center"><img src="fig_timings.png" width="600" height="244"></p><p style="text-align:center"><b>Figure 7 - Design budgets and measured timings (telemetry 200 ms, broker delivery 405 ms, watchdog 1501 ms, reconnect 4200 ms)</b></p>
+<p style="text-align:center"><img src="fig_dash_login.png" width="600" height="284"></p><p style="text-align:center"><b>Figure 8 - Dashboard served over HTTPS showing the broker login and the red LINK LOST status ring before sign-in</b></p>
+<p><b>Open items:</b> the left and right current readings carry opposite signs at equal duty (about -0.6 A and +0.6 A, likely INA219 orientation; the firmware uses the magnitude), and a mid-packet link drop and a Wi-Fi drop-and-recover have not yet been tested on hardware.</p>
+</body></html>

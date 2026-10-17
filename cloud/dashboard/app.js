@@ -8,11 +8,14 @@
 // design.md - same joystick/telemetry UI, different transport.
 
 (function () {
-  // Local-dev broker's WebSocket listener (cloud/mosquitto/mosquitto.conf).
-  // On EC2 this becomes a path behind nginx's WSS reverse proxy (design
-  // D3) - a configuration-only change, same swap philosophy as plan.md
-  // 2c.1, not a code change.
-  const MQTT_WS_URL = "ws://" + location.hostname + ":9001";
+  // Served over https (EC2): WSS through nginx's /mqtt proxy (design D3),
+  // with a broker username/password from the login overlay. Served over
+  // plain http (local Docker rehearsal): the anonymous WebSocket listener
+  // from cloud/mosquitto/mosquitto.conf, no login.
+  const SECURE = location.protocol === "https:";
+  const MQTT_WS_URL = SECURE
+    ? "wss://" + location.host + "/mqtt"
+    : "ws://" + location.hostname + ":9001";
   const KEEPALIVE_MS = 150;   // well under the ESP32's 1500ms watchdog (design D6)
   const TELEMETRY_STALE_MS = 1000;   // 5x the ESP32's ~200ms telemetry interval
   const STALE_CHECK_MS = 300;
@@ -30,6 +33,12 @@
   const dutyValue = document.getElementById("dutyValue");
   const batteryFill  = document.getElementById("batteryFill");
   const batteryLabel = document.getElementById("batteryLabel");
+
+  const loginOverlay = document.getElementById("loginOverlay");
+  const loginForm    = document.getElementById("loginForm");
+  const loginUser    = document.getElementById("loginUser");
+  const loginPass    = document.getElementById("loginPass");
+  const loginError   = document.getElementById("loginError");
 
   let client = null;
   let connected = false;
@@ -62,8 +71,17 @@
     client.publish(driveTopic(ROBOT_ID), buildDriveMessage(left, right));
   }
 
-  function connect() {
-    const c = mqtt.connect(MQTT_WS_URL, { reconnectPeriod: 1000 });
+  function showLogin(message) {
+    loginError.textContent = message || "";
+    loginOverlay.hidden = false;
+    loginPass.value = "";
+    (loginUser.value ? loginPass : loginUser).focus();
+  }
+
+  function connect(creds) {
+    const opts = { reconnectPeriod: 1000 };
+    if (creds) { opts.username = creds.username; opts.password = creds.password; }
+    const c = mqtt.connect(MQTT_WS_URL, opts);
     client = c;
 
     c.on("connect", () => {
@@ -90,9 +108,19 @@
       stopKeepalive();
     });
 
-    c.on("error", () => {
-      // MQTT.js's own reconnectPeriod handles retry - nothing to do here
-      // beyond what "close"/"reconnect" already cover.
+    c.on("error", (err) => {
+      // Network errors: MQTT.js's own reconnectPeriod handles retry - nothing
+      // to do here beyond what "close"/"reconnect" already cover. CONNACK
+      // 4/5 (bad credentials / not authorised) is different: retrying the
+      // same wrong password forever helps no one, so stop and re-prompt.
+      if (err && (err.code === 4 || err.code === 5)) {
+        c.end(true);
+        client = null;
+        connected = false;
+        setStatus("disconnected");
+        setWarning("LOGIN FAILED");
+        showLogin("Wrong username or password.");
+      }
     });
 
     c.on("message", (topic, payloadBuf) => {
@@ -213,5 +241,20 @@
   setArc(currentLeftArc, 80, 0);
   setArc(currentRightArc, 60, 0);
   setInterval(checkTelemetryStale, STALE_CHECK_MS);
-  connect();
+
+  if (SECURE) {
+    // Credentials live only in this page's memory; a reload asks again.
+    loginForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const creds = { username: loginUser.value.trim(), password: loginPass.value };
+      if (!creds.username || !creds.password) return;
+      loginOverlay.hidden = true;
+      setWarning("");
+      if (client) client.end(true);
+      connect(creds);
+    });
+    showLogin("");
+  } else {
+    connect(null);
+  }
 })();

@@ -1,30 +1,32 @@
 #pragma once
 
-// mqtt_handler.h - MQTT client (PubSubClient over a plain WiFiClient for
-// local-dev; swap to WiFiClientSecure for the real EC2/TLS endpoint, design
-// D2/D4 - not yet wired up here, local-dev only, see UPDATES.md), the
+// mqtt_handler.h - MQTT client (PubSubClient over WiFiClientSecure to the
+// EC2 broker on 8883: TLS with the pinned self-signed cert + username/
+// password, design D2/D4/D5; host, creds and cert come from the uncommitted
+// secrets.h - copy secrets.h.example), the
 // robot/{id}/drive subscription and robot/{id}/telemetry publish (design
 // doc docs/superpowers/specs/2026-10-04-cloud-web-dashboard-design.md §4),
 // and the command watchdog. Includes drive_core.h itself (safe under its
 // #pragma once guard even though web_drive.ino also includes it directly).
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <string.h>
 #include <stdlib.h>
 #include <math.h>
 
 #include "drive_core.h"
+#include "secrets.h"   // BROKER_HOST/PORT, MQTT_USER/PASS, BROKER_CA_CERT - uncommitted
 
-// [TBD] point this at your dev machine's LAN IP running
-// cloud/docker-compose.yml's mosquitto service (design doc §8 item 1).
-// The ESP32 can't resolve "localhost" to the dev machine - it needs a real
-// reachable address on the same Wi-Fi network as WIFI_SSID in web_drive.ino.
-static const char *MQTT_BROKER_HOST = "192.0.2.1";
-static const uint16_t MQTT_BROKER_PORT = 1883;
+// Broker address/port come from secrets.h (EC2 Elastic IP, 8883). To rehearse
+// against the local Docker broker instead, that broker has no TLS - it would
+// need a TLS listener first; the local stack is for dashboard/broker-only work.
+static const char *MQTT_BROKER_HOST = BROKER_HOST;
+static const uint16_t MQTT_BROKER_PORT = BROKER_PORT;
 static const char *ROBOT_ID = "robot1";   // [ASSUMPTION] must match cloud/dashboard/mqtt_topics.js's ROBOT_ID
 
-static WiFiClient wifiClient;
+static WiFiClientSecure wifiClient;
 static PubSubClient mqttClient(wifiClient);
 
 static volatile uint32_t lastDriveMsgMs = 0;
@@ -118,6 +120,8 @@ static void mqttSetup() {
   // waiting out the 15s default MQTT keepalive.
   mqttClient.setKeepAlive(5);
 
+  wifiClient.setCACert(BROKER_CA_CERT);   // pinned self-signed broker cert
+  wifiClient.setTimeout(2);               // seconds; bounds TLS handshake reads
   mqttClient.setServer(MQTT_BROKER_HOST, MQTT_BROKER_PORT);
   mqttClient.setCallback(mqttMessageReceived);
 }
@@ -132,9 +136,12 @@ static void mqttReconnect() {
   stopAll();
 
   String clientId = "esp32-" + String(ROBOT_ID);
-  if (mqttClient.connect(clientId.c_str())) {
+  if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
     mqttClient.subscribe(driveTopicBuf);
     Serial.println("MQTT connected and subscribed");
+  } else {
+    Serial.print("MQTT connect failed, state=");
+    Serial.println(mqttClient.state());
   }
 }
 

@@ -3,3 +3,4 @@ CLAUDE.local.md
 node_modules/
 package.json
 package-lock.json
+embedded/web_drive/secrets.h
