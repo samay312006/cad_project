@@ -42,6 +42,7 @@ void setup() {
   Serial.begin(115200);
   delay(300);
 
+  magnetSetup();  // relay OFF before anything else can run
   driveSetup();   // kills both bridges first, then brings up pins + INA219s
 
   WiFi.mode(WIFI_STA);

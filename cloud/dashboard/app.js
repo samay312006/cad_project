@@ -23,8 +23,8 @@
   const statusRing   = document.getElementById("statusRing");
   const joystickBase = document.getElementById("joystickBase");
   const joystickPuck = document.getElementById("joystickPuck");
-  const speedCap      = document.getElementById("speedCap");
-  const speedCapValue = document.getElementById("speedCapValue");
+  const magnetBtn   = document.getElementById("magnetBtn");
+  const magnetStateEl = document.getElementById("magnetState");
   const warningLabel  = document.getElementById("warningLabel");
 
   const currentLeftFill  = document.getElementById("currentLeftFill");
@@ -46,10 +46,32 @@
   let keepaliveTimer = null;
   let lastTelemetryMs = null;   // null = no telemetry received yet this connection
 
+  // Electromagnet: the ESP32 is the source of truth. The button only ever
+  // sends an explicit on/off request and then shows what the robot reports
+  // back in telemetry (dashed border = request sent, not yet confirmed).
+  let magnetConfirmed = null;     // null until a telemetry message carries it
+  let magnetPending = false;
+  let magnetPendingTimer = null;
+
+  function magnetUsable() {
+    return connected && client && magnetConfirmed !== null &&
+           !isTelemetryStale(lastTelemetryMs, Date.now(), TELEMETRY_STALE_MS);
+  }
+
+  function updateMagnetUi() {
+    const usable = magnetUsable();
+    magnetBtn.disabled = !usable;
+    magnetBtn.classList.toggle("magnet-on", usable && magnetConfirmed === true);
+    magnetBtn.classList.toggle("magnet-pending", usable && magnetPending);
+    magnetStateEl.textContent = !usable ? "--"
+      : (magnetConfirmed ? "ON" : "OFF");
+  }
+
   function setStatus(state) {
     // state: "connected" | "disconnected" | "stopped"
     statusRing.classList.remove("status-connected", "status-disconnected", "status-stopped");
     statusRing.classList.add("status-" + state);
+    updateMagnetUi();
   }
 
   function setWarning(text) {
@@ -65,8 +87,9 @@
     // executes late" risk the design doc's §5 flags. Not calling publish()
     // at all while disconnected sidesteps that queue entirely.
     if (!connected || !client) return;
-    const cap = speedCap.value / 100;
-    const { left, right } = mixDrive(dx, dy, cap);
+    // No speed cap (removed at the human's request 2026-10-17): full stick
+    // is a full duty command; the firmware decides what it applies.
+    const { left, right } = mixDrive(dx, dy, 1);
     client.publish(driveTopic(ROBOT_ID), buildDriveMessage(left, right));
   }
 
@@ -167,6 +190,12 @@
     setBar(currentLeftFill,  currentLeftValue,  msg.left_a);
     setBar(currentRightFill, currentRightValue, msg.right_a);
     dutyValue.textContent = "L " + msg.left_duty + " / R " + msg.right_duty;
+    if (typeof msg.magnet === "boolean") {
+      if (msg.magnet === magnetConfirmed) { /* no change */ }
+      else magnetPending = false;          // robot confirmed the new state
+      magnetConfirmed = msg.magnet;
+    }
+    updateMagnetUi();
   }
 
   // ---- joystick input ----
@@ -226,8 +255,14 @@
   joystickBase.addEventListener("pointerup", onPointerUp);
   joystickBase.addEventListener("pointercancel", onPointerUp);
 
-  speedCap.addEventListener("input", () => {
-    speedCapValue.textContent = speedCap.value + "%";
+  magnetBtn.addEventListener("click", () => {
+    if (!magnetUsable()) return;
+    const want = !magnetConfirmed;
+    magnetPending = true;
+    clearTimeout(magnetPendingTimer);
+    magnetPendingTimer = setTimeout(() => { magnetPending = false; updateMagnetUi(); }, 3000);
+    client.publish(magnetTopic(ROBOT_ID), buildMagnetMessage(want), { qos: 1 });
+    updateMagnetUi();
   });
 
   setStatus("disconnected");

@@ -1,6 +1,6 @@
 // cloud/dashboard/test/mqtt_topics.test.js
 const assert = require("assert");
-const { driveTopic, telemetryTopic, buildDriveMessage, parseTelemetryMessage, isTelemetryStale } = require("../mqtt_topics.js");
+const { driveTopic, telemetryTopic, magnetTopic, buildMagnetMessage, buildDriveMessage, parseTelemetryMessage, isTelemetryStale } = require("../mqtt_topics.js");
 
 // topic builders match design doc §4 exactly
 {
@@ -74,6 +74,20 @@ const { driveTopic, telemetryTopic, buildDriveMessage, parseTelemetryMessage, is
 // broker-connection-only "connected" flag can't detect on its own
 {
   assert.strictEqual(isTelemetryStale(1000, 2001, 1000), true);
+}
+
+// magnet topic + message: explicit on/off, never a toggle
+assert.strictEqual(magnetTopic("robot1"), "robot/robot1/magnet");
+assert.deepStrictEqual(JSON.parse(buildMagnetMessage(true)),  { on: true });
+assert.deepStrictEqual(JSON.parse(buildMagnetMessage(false)), { on: false });
+assert.deepStrictEqual(JSON.parse(buildMagnetMessage("yes")), { on: false });   // only a real boolean true turns it on
+
+// telemetry: magnet field is optional, but must be boolean when present
+{
+  const base = { left_a: 0.1, right_a: 0.1, left_duty: 1, right_duty: 1, vbus: 12 };
+  assert.strictEqual(parseTelemetryMessage(JSON.stringify(base)).magnet, undefined);
+  assert.strictEqual(parseTelemetryMessage(JSON.stringify({ ...base, magnet: true })).magnet, true);
+  assert.strictEqual(parseTelemetryMessage(JSON.stringify({ ...base, magnet: "on" })), null);
 }
 
 console.log("mqtt_topics.test.js: all assertions passed");

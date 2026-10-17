@@ -17,6 +17,7 @@
 #include <math.h>
 
 #include "drive_core.h"
+#include "magnet.h"
 #include "secrets.h"   // BROKER_HOST/PORT, MQTT_USER/PASS, BROKER_CA_CERT - uncommitted
 
 // Broker address/port come from secrets.h (EC2 Elastic IP, 8883). To rehearse
@@ -34,6 +35,7 @@ static const uint32_t WATCHDOG_MS = 1500;   // design D6 - raised from the local
 
 static char driveTopicBuf[32];
 static char telemetryTopicBuf[32];
+static char magnetTopicBuf[32];
 
 // ---- inbound: {"left":N,"right":N} on robot/{id}/drive ----
 // Hand-rolled parsing, not a JSON library - unchanged logic from the
@@ -62,6 +64,21 @@ static bool parseDriveMessage(const char *json, int *left, int *right) {
   return true;
 }
 
+// ---- inbound: {"on":true|false} on robot/{id}/magnet ----
+// Strict: anything that is not exactly a true/false after "on": is dropped
+// and the magnet state is left as-is (never defaults to a state).
+static bool parseMagnetMessage(const char *json, bool *on) {
+  const char *p = strstr(json, "\"on\"");
+  if (!p) return false;
+  p = strchr(p, ':');
+  if (!p) return false;
+  p++;
+  while (*p == ' ') p++;
+  if (strncmp(p, "true", 4) == 0)  { *on = true;  return true; }
+  if (strncmp(p, "false", 5) == 0) { *on = false; return true; }
+  return false;
+}
+
 static void mqttMessageReceived(char *topic, byte *payload, unsigned int length) {
   // 192 bytes comfortably covers {"left":-255,"right":-255} with room to
   // spare; anything bigger is rejected rather than truncated-and-parsed,
@@ -73,6 +90,12 @@ static void mqttMessageReceived(char *topic, byte *payload, unsigned int length)
   char buf[MAX_PAYLOAD];
   memcpy(buf, payload, length);
   buf[length] = '\0';
+
+  if (strcmp(topic, magnetTopicBuf) == 0) {
+    bool on;
+    if (parseMagnetMessage(buf, &on)) magnetSet(on);
+    return;   // never reaches the drive path / watchdog timestamp
+  }
 
   int left, right;
   if (parseDriveMessage(buf, &left, &right)) {
@@ -100,6 +123,7 @@ static void mqttWatchdogCheck() {
 static void mqttSetup() {
   snprintf(driveTopicBuf, sizeof(driveTopicBuf), "robot/%s/drive", ROBOT_ID);
   snprintf(telemetryTopicBuf, sizeof(telemetryTopicBuf), "robot/%s/telemetry", ROBOT_ID);
+  snprintf(magnetTopicBuf, sizeof(magnetTopicBuf), "robot/%s/magnet", ROBOT_ID);
 
   // PubSubClient's default socket timeout is 15s: if a drive packet starts
   // arriving and then the link dies mid-packet, mqttClient.loop() (called
@@ -138,6 +162,7 @@ static void mqttReconnect() {
   String clientId = "esp32-" + String(ROBOT_ID);
   if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS)) {
     mqttClient.subscribe(driveTopicBuf);
+    mqttClient.subscribe(magnetTopicBuf);
     Serial.println("MQTT connected and subscribed");
   } else {
     Serial.print("MQTT connect failed, state=");
@@ -179,9 +204,10 @@ static void mqttSendTelemetry() {
   char json[192];
   int n = snprintf(json, sizeof(json),
     "{\"left_a\":%.3f,\"right_a\":%.3f,"
-    "\"left_duty\":%d,\"right_duty\":%d,\"vbus\":%.2f}",
+    "\"left_duty\":%d,\"right_duty\":%d,\"vbus\":%.2f,\"magnet\":%s}",
     leftAmps, rightAmps,
-    lastDuty[LEFT], lastDuty[RIGHT], readBusVoltage());
+    lastDuty[LEFT], lastDuty[RIGHT], readBusVoltage(),
+    magnetOn ? "true" : "false");
 
   mqttClient.publish(telemetryTopicBuf, (const uint8_t *)json, n, false);
 }

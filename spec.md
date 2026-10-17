@@ -157,9 +157,10 @@ the same broker the ESP32 talks to, not an intermediary in this contract.
   | Topic | Direction | Content | Rate | Status |
   |---|---|---|---|---|
   | `robot/{id}/drive` | dashboard→ESP32 | pre-mixed duty, `{"left": -255, "right": 255}` | event-driven, keepalive while held | **Implemented** (`embedded/web_drive/`, `cloud/dashboard/`) |
-  | `robot/{id}/telemetry` | ESP32→dashboard/cloud | `{"left_a":0.42,"right_a":0.39,"left_duty":180,"right_duty":178,"vbus":12.1}` | `[ASSUMPTION] 5 Hz` | **Implemented** — reduced shape (drive bring-up only); the full target shape below is still `[TBD]`, not built |
+  | `robot/{id}/telemetry` | ESP32→dashboard/cloud | `{"left_a":0.42,"right_a":0.39,"left_duty":180,"right_duty":178,"vbus":12.1,"magnet":false}` (`magnet` additive 2026-10-17) | `[ASSUMPTION] 5 Hz` | **Implemented** — reduced shape (drive bring-up only); the full target shape below is still `[TBD]`, not built |
   | `robot/{id}/scan` | ESP32→cloud | range-scan, `LaserScan`-shaped | rate gated by sensor+servo sweep speed `[TBD/VERIFY]` | **Not implemented.** `[TBD]` — previously assembled by the phone from per-sample messages; with no phone, whether the ESP32 assembles a full scan itself before publishing, or publishes raw samples for EC2 to assemble, is an open design question, not decided by the 2026-10-04 design |
   | `robot/{id}/odom` | ESP32→cloud | odometry estimate (IMU/wheel-derived) | `[ASSUMPTION] matches scan rate or faster` | Not implemented |
+  | `robot/{id}/magnet` | dashboard→ESP32 | explicit on/off, `{"on": true}` / `{"on": false}` (never a toggle); QoS 1; malformed payloads are ignored and leave the state unchanged. State is **latched** (§5) — the drive watchdog, stop, and link loss never change it; ESP32 boots with it OFF. The confirmed state is reported back as the additive telemetry field `"magnet": true/false` | event-driven | **Implemented** (`embedded/web_drive/magnet.h` + `mqtt_handler.h`, GPIO19 relay as in `drive_test.ino`; `cloud/dashboard/` button) |
   | `robot/{id}/map` | cloud→dashboard | current map, GUI display | on-change, low rate | Not implemented |
   | `robot/{id}/waypoints` | cloud→ESP32 | D*-Lite output path | event-driven, on (re)plan | Not implemented |
   | `robot/{id}/cmd` | dashboard→cloud | e.g. "compute path to goal (x,y)" | event-driven | Not implemented |

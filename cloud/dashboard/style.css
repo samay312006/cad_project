@@ -97,13 +97,25 @@ html, body {
   pointer-events: none;
 }
 
-.speed-cap {
+.magnet-btn {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px;
-  font-size: 0.8rem;
-  letter-spacing: 0.1em;
+  gap: 2px;
+  min-width: 200px;
+  padding: 12px 20px;
+  font: inherit;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.4);
+  border: 2px solid var(--teal-dim);
+  border-radius: 10px;
+  touch-action: manipulation;
 }
+.magnet-btn:disabled { opacity: 0.45; }
+.magnet-btn.magnet-on { border-color: var(--orange); box-shadow: 0 0 14px rgba(255, 138, 61, 0.45); }
+.magnet-btn.magnet-pending { border-style: dashed; }
+.magnet-title { font-size: 0.75rem; letter-spacing: 0.2em; color: var(--teal-dim); }
+.magnet-state { font-size: 1.2rem; font-weight: 600; }
 
 .warning {
   min-height: 1.2em;

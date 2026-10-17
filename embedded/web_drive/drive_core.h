@@ -32,6 +32,12 @@ static const int PWM_BITS    = 8;
 // v0Drop/rTot values are drive_calib.ino's DEFAULTS, not a measured
 // calibration (none exists in this repo yet) - see design doc §9.
 static const float V_MOTOR_MAX = 5.5f;
+// Motor-protection clamp (dutyMaxCounts below). DISABLED at the human's
+// request 2026-10-17 (skid-steer turns stalled at the clamped ~131/255): with
+// it off, a full command puts ~(Vbus - L298N drop) ~ 10 V on motors rated
+// 3-6 V, so keep stalls/holds short and watch the L298N heat. Set true to
+// restore the 5.5 V ceiling.
+static const bool APPLY_MOTOR_VOLTAGE_CLAMP = false;
 static float vBusManual = 12.6f;
 static float vbusScale  = 5.545f;   // (100k + 22k) / 22k
 static bool  useDivider = false;    // no GPIO34 divider fitted yet
@@ -83,7 +89,7 @@ static void pwmSetup(int pin, int ch) {
 // Returns the actually-applied (clamped) duty magnitude, so callers can
 // record what the hardware really did rather than what was requested.
 static int pwmWrite(int pin, int ch, int duty) {
-  int cap = dutyMaxCounts();
+  int cap = APPLY_MOTOR_VOLTAGE_CLAMP ? dutyMaxCounts() : 255;
   if (duty > cap) duty = cap;
   if (duty < 0)   duty = 0;
 #if ESP_ARDUINO_VERSION_MAJOR >= 3

@@ -11,6 +11,16 @@ function driveTopic(robotId) {
   return "robot/" + robotId + "/drive";
 }
 
+function magnetTopic(robotId) {
+  return "robot/" + robotId + "/magnet";
+}
+
+// Explicit on/off only - never a "toggle", so a repeated or late message
+// can't flip the payload the wrong way.
+function buildMagnetMessage(on) {
+  return JSON.stringify({ on: on === true });
+}
+
 function telemetryTopic(robotId) {
   return "robot/" + robotId + "/telemetry";
 }
@@ -37,6 +47,9 @@ function parseTelemetryMessage(payload) {
     var v = msg[required[i]];
     if (typeof v !== "number" || !isFinite(v)) return null;
   }
+  // `magnet` is additive (spec.md 6.1): absent from older firmware, but if
+  // present it must be a boolean.
+  if ("magnet" in msg && typeof msg.magnet !== "boolean") return null;
   return msg;
 }
 
@@ -58,6 +71,8 @@ if (typeof module !== "undefined") {
     ROBOT_ID: ROBOT_ID,
     driveTopic: driveTopic,
     telemetryTopic: telemetryTopic,
+    magnetTopic: magnetTopic,
+    buildMagnetMessage: buildMagnetMessage,
     buildDriveMessage: buildDriveMessage,
     parseTelemetryMessage: parseTelemetryMessage,
     isTelemetryStale: isTelemetryStale,
