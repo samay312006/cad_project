@@ -1,0 +1,81 @@
+/*
+ * web_drive.ino - landscape browser drive control + telemetry, now relayed
+ * through the cloud (EC2 Mosquitto broker) instead of the ESP32's own
+ * Wi-Fi AP. See docs/superpowers/specs/2026-10-04-cloud-web-dashboard-
+ * design.md for the full design; this sketch is still the same "bring-up
+ * tool" scope as before (no SAFE_HOLD, no mode state machine, spec.md §5)
+ * - only the transport changed, from local AP+WebSocket to Wi-Fi-station+
+ * MQTT.
+ *
+ * Two things still stand in for the real safety stack:
+ *   - a voltage-based duty clamp (drive_core.h, from drive_calib.ino) so
+ *     3.0-6.0V motors never see more than ~5.5V from this 12V bus
+ *   - a command watchdog (mqtt_handler.h): no valid "drive" message ->
+ *     motors stop. Timeout raised from 400ms (local-AP) to 1500ms (design
+ *     D6) to tolerate ordinary internet/cloud-relay latency/jitter without
+ *     false-tripping.
+ *
+ * WHEELS OFF THE GROUND for first bring-up - not yet bench-tested with this
+ * MQTT transport (see UPDATES.md).
+ *
+ * The dashboard frontend (index.html/style.css/mix.js/mqtt_topics.js/
+ * app.js) no longer lives here - it moved to cloud/dashboard/, served by
+ * nginx (locally, or on EC2), not LittleFS. No LittleFS image needed for
+ * this sketch anymore.
+ */
+
+#include <WiFi.h>
+
+// Wi-Fi + broker settings and credentials live in secrets.h (gitignored);
+// copy secrets.example.h to secrets.h and fill it in. Without one, the
+// placeholders build but can't connect to anything.
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#warning "web_drive: no secrets.h - building with secrets.example.h placeholders"
+#include "secrets.example.h"
+#endif
+
+#include "drive_core.h"
+#include "mqtt_handler.h"
+
+static uint32_t telemetryNextMs = 0;
+static const uint32_t TELEMETRY_MS = 200;   // ~5 Hz, unchanged from the local-AP version
+
+void setup() {
+  Serial.begin(115200);
+  delay(300);
+
+  driveSetup();   // kills both bridges first, then brings up pins + INA219s
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  Serial.print("Connecting to Wi-Fi");
+  while (WiFi.status() != WL_CONNECTED) {
+    // Blocking by design, only at boot: nothing meaningful to drive yet
+    // (driveSetup() above already forced motors to zero), so there's no
+    // watchdog to stall here the way there would be once loop() starts.
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println();
+  Serial.print("Wi-Fi connected, IP: ");
+  Serial.println(WiFi.localIP());
+
+  mqttSetup();
+  Serial.println("MQTT client configured. Connecting in loop()...");
+}
+
+void loop() {
+  mqttLoop();   // services the MQTT client, (re)connects as needed, and
+                // runs the command watchdog on every iteration - see
+                // mqtt_handler.h's mqttLoop() for why reconnect and the
+                // watchdog can't be two independent blocking steps here.
+
+  if ((int32_t)(millis() - telemetryNextMs) >= 0) {
+    telemetryNextMs = millis() + TELEMETRY_MS;
+    mqttSendTelemetry();
+  }
+
+  delay(2);
+}
