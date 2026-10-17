@@ -25,6 +25,7 @@
   const joystickPuck = document.getElementById("joystickPuck");
   const magnetBtn   = document.getElementById("magnetBtn");
   const magnetStateEl = document.getElementById("magnetState");
+  const magnetLight   = document.getElementById("magnetLight");
   const warningLabel  = document.getElementById("warningLabel");
 
   const currentLeftFill  = document.getElementById("currentLeftFill");
@@ -63,6 +64,9 @@
     magnetBtn.disabled = !usable;
     magnetBtn.classList.toggle("magnet-on", usable && magnetConfirmed === true);
     magnetBtn.classList.toggle("magnet-pending", usable && magnetPending);
+    // Red = robot reports the magnet OFF, green = ON, grey = unknown/offline.
+    magnetLight.classList.toggle("light-off", usable && magnetConfirmed === false);
+    magnetLight.classList.toggle("light-on",  usable && magnetConfirmed === true);
     magnetStateEl.textContent = !usable ? "--"
       : (magnetConfirmed ? "ON" : "OFF");
   }

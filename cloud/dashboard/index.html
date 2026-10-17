@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
 <title>Robot Drive Dashboard</title>
-<link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/style.css?v=20261017b">
 </head>
 <body>
   <div class="login-overlay" id="loginOverlay" hidden>
@@ -27,7 +27,7 @@
       </div>
       <button type="button" class="magnet-btn" id="magnetBtn" disabled>
         <span class="magnet-title">ELECTROMAGNET</span>
-        <span class="magnet-state" id="magnetState">--</span>
+        <span class="magnet-state"><span class="magnet-light" id="magnetLight"></span><span id="magnetState">--</span></span>
       </button>
       <div class="warning" id="warningLabel"></div>
     </section>
@@ -50,8 +50,8 @@
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.1/dist/mqtt.min.js"></script>
-  <script src="/mix.js"></script>
-  <script src="/mqtt_topics.js"></script>
-  <script src="/app.js"></script>
+  <script src="/mix.js?v=20261017b"></script>
+  <script src="/mqtt_topics.js?v=20261017b"></script>
+  <script src="/app.js?v=20261017b"></script>
 </body>
 </html>

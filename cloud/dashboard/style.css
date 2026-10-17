@@ -112,7 +112,15 @@ html, body {
   touch-action: manipulation;
 }
 .magnet-btn:disabled { opacity: 0.45; }
-.magnet-btn.magnet-on { border-color: var(--orange); box-shadow: 0 0 14px rgba(255, 138, 61, 0.45); }
+.magnet-btn.magnet-on { border-color: #3ddc84; box-shadow: 0 0 14px rgba(61, 220, 132, 0.45); }
+.magnet-state { display: inline-flex; align-items: center; gap: 10px; }
+.magnet-light {
+  width: 16px; height: 16px; border-radius: 50%;
+  background: #555; box-shadow: none;
+  transition: background 150ms, box-shadow 150ms;
+}
+.magnet-light.light-off { background: var(--red); box-shadow: 0 0 10px var(--red); }
+.magnet-light.light-on  { background: #3ddc84;    box-shadow: 0 0 10px #3ddc84; }
 .magnet-btn.magnet-pending { border-style: dashed; }
 .magnet-title { font-size: 0.75rem; letter-spacing: 0.2em; color: var(--teal-dim); }
 .magnet-state { font-size: 1.2rem; font-weight: 600; }
